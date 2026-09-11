@@ -1,3 +1,6 @@
+> [!NOTE]
+> **thehumanworks fork:** supports `CHATGPT_AUTH_TOKEN` in interactive Codex and `codex exec`, without `auth.json`. `CHATGPT_ACCOUNT_ID` is derived from the token when available. See [fork usage and verification](FORK.md).
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />

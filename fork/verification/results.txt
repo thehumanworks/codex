@@ -1,0 +1,34 @@
+Verification completed: 2026-09-11T14:42:44+00:00
+Implementation: fab2e63e55d1a833dd3560b9435545daf002fe74
+Upstream base: 7a6f469dcff1337786aae046df2d899accea59ab
+
+Summary [   8.404s] 755 tests run: 755 passed, 0 skipped
+Summary [   2.917s] 7 tests run: 7 passed, 0 skipped
+
+test_app_server_logout_preserves_cached_credentials (__main__.EnvironmentAuthTests.test_app_server_logout_preserves_cached_credentials) ... ok
+test_blank_token_and_account_only_do_not_login (__main__.EnvironmentAuthTests.test_blank_token_and_account_only_do_not_login) ... ok
+test_cached_api_key_still_works_without_environment_token (__main__.EnvironmentAuthTests.test_cached_api_key_still_works_without_environment_token) ... ok
+test_environment_bypasses_credential_stores (__main__.EnvironmentAuthTests.test_environment_bypasses_credential_stores) ... ok
+test_environment_overrides_corrupt_cache_without_reading_or_writing_it (__main__.EnvironmentAuthTests.test_environment_overrides_corrupt_cache_without_reading_or_writing_it) ... ok
+test_exec_json_sends_explicit_account_without_cache (__main__.EnvironmentAuthTests.test_exec_json_sends_explicit_account_without_cache) ... ok
+test_exec_preserves_codex_api_key_precedence (__main__.EnvironmentAuthTests.test_exec_preserves_codex_api_key_precedence) ... ok
+test_exec_sends_derived_auth_headers_without_cache (__main__.EnvironmentAuthTests.test_exec_sends_derived_auth_headers_without_cache) ... ok
+test_forced_api_policy_does_not_use_chatgpt_token (__main__.EnvironmentAuthTests.test_forced_api_policy_does_not_use_chatgpt_token) ... ok
+test_forced_workspace_rejects_without_deleting_cache (__main__.EnvironmentAuthTests.test_forced_workspace_rejects_without_deleting_cache) ... ok
+test_interactive_tui_sends_request_without_login_onboarding (__main__.EnvironmentAuthTests.test_interactive_tui_sends_request_without_login_onboarding) ... ok
+test_invalid_tokens_fail_closed_without_secret_in_errors (__main__.EnvironmentAuthTests.test_invalid_tokens_fail_closed_without_secret_in_errors) ... ok
+test_invalid_unicode_credentials_report_safe_errors (__main__.EnvironmentAuthTests.test_invalid_unicode_credentials_report_safe_errors) ... ok
+test_login_and_status_use_environment_without_writing_cache (__main__.EnvironmentAuthTests.test_login_and_status_use_environment_without_writing_cache) ... ok
+test_logout_explains_environment_without_deleting_cache (__main__.EnvironmentAuthTests.test_logout_explains_environment_without_deleting_cache) ... ok
+test_missing_account_requires_only_account_override (__main__.EnvironmentAuthTests.test_missing_account_requires_only_account_override) ... ok
+test_rejected_token_does_not_attempt_oauth_or_write_cache (__main__.EnvironmentAuthTests.test_rejected_token_does_not_attempt_oauth_or_write_cache) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 61.202s
+
+OK
+
+Rust formatting: just fmt-check, exit 0.
+Python lint: All checks passed!
+Rust Clippy: completed successfully; no warnings in the final check.
+Live ChatGPT API: not run (configured Doppler credential source was unavailable).
