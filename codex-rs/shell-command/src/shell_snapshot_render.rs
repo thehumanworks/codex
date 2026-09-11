@@ -9,11 +9,15 @@ impl CapturedSnapshot<'_> {
         format!("{}{}", self.state, self.aliases)
     }
 
-    /// Render a complete replay script without applying credential or environment policy.
+    /// Render a replay script, excluding host-only authentication exports.
+    /// General shell-environment policy is applied separately by credential-aware callers.
     pub fn render_script(&self) -> String {
         let mut script = self.render_state();
         script.push_str("# exports (native declarations)\n");
         for export in &self.exports {
+            if codex_protocol::shell_environment::is_non_inheritable_env_var(export.key) {
+                continue;
+            }
             script.push_str(&export.source);
         }
         script

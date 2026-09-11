@@ -3,6 +3,7 @@ use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
 
+pub const CHATGPT_AUTH_TOKEN_ENV_VAR: &str = "CHATGPT_AUTH_TOKEN";
 pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN";
@@ -12,6 +13,7 @@ pub const OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR: &str = "OPENAI_WORKLOAD_IDEN
 
 /// Environment variables that model-reachable child processes must not inherit.
 pub const NON_INHERITABLE_ENV_VARS: &[&str] = &[
+    CHATGPT_AUTH_TOKEN_ENV_VAR,
     CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR,
     "NODE_REPL_AUTH_TOKEN",
     OPENAI_FEDERATION_RULE_ID_ENV_VAR,

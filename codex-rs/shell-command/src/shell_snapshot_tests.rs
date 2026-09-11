@@ -2233,3 +2233,18 @@ fn captured_script(shell_type: ShellType, source: &str) -> Result<String> {
         CapturedSnapshot::parse(shell_type, source.as_bytes()).context("invalid native capture")?;
     Ok(captured.render_script())
 }
+
+#[test]
+fn snapshot_render_omits_host_only_authentication_exports() -> Result<()> {
+    for name in ["CHATGPT_AUTH_TOKEN", "Chatgpt_Auth_Token"] {
+        let source = format!(
+            "# Snapshot file\n\0\0{name}\0export {name}='private-chatgpt-token'\n\0SAFE\0export SAFE='keep'\n\0\0"
+        );
+        let rendered = captured_script(ShellType::Bash, &source)?;
+        assert_eq!(
+            rendered,
+            "# Snapshot file\n# exports (native declarations)\nexport SAFE='keep'\n"
+        );
+    }
+    Ok(())
+}

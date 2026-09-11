@@ -168,6 +168,9 @@ pub async fn login_with_chatgpt(
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
+    if codex_login::is_chatgpt_auth_token_configured() {
+        run_login_status(cli_config_overrides).await;
+    }
     let config = load_config_or_exit(cli_config_overrides).await;
     let _login_log_guard = init_login_file_logging(&config);
     tracing::info!("starting browser login flow");
@@ -473,7 +476,11 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT");
+                if auth.is_environment_chatgpt_auth() {
+                    eprintln!("Logged in using ChatGPT (CHATGPT_AUTH_TOKEN)");
+                } else {
+                    eprintln!("Logged in using ChatGPT");
+                }
                 std::process::exit(0);
             }
             AuthMode::Headers => {
@@ -508,6 +515,12 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 }
 
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
+    if codex_login::is_chatgpt_auth_token_configured() {
+        eprintln!(
+            "CHATGPT_AUTH_TOKEN is set; unset it in the launching environment to stop using it. Cached credentials were left unchanged."
+        );
+        std::process::exit(1);
+    }
     let config = load_config_or_exit(cli_config_overrides).await;
     let auth_route_config = config.auth_route_config();
 

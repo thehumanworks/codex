@@ -180,6 +180,7 @@ pub struct ChatgptAuth {
 #[derive(Debug, Clone)]
 pub struct ChatgptAuthTokens {
     state: ChatgptAuthState,
+    environment_managed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -395,7 +396,10 @@ impl CodexAuth {
                 );
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
-            AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state })),
+            AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens {
+                state,
+                environment_managed: false,
+            })),
             AuthMode::ApiKey => unreachable!("api key mode is handled above"),
             AuthMode::Headers => {
                 unreachable!("externally provided auth is never loaded from auth storage")
@@ -526,6 +530,11 @@ impl CodexAuth {
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
         matches!(self, Self::ChatgptAuthTokens(_))
+    }
+
+    /// Environment-managed tokens must be replaced by the launching process.
+    pub fn is_environment_chatgpt_auth(&self) -> bool {
+        matches!(self, Self::ChatgptAuthTokens(auth) if auth.environment_managed)
     }
 
     fn supports_unauthorized_recovery(&self) -> bool {
@@ -832,7 +841,10 @@ impl CodexAuth {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client: create_client(),
         };
-        Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
+        Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens {
+            state,
+            environment_managed: false,
+        }))
     }
 
     pub fn from_api_key(api_key: &str) -> Self {
@@ -1320,6 +1332,14 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
         return Ok(());
     };
 
+    // Reject restricted environment credentials without deleting unrelated cached logins.
+    if auth.is_environment_chatgpt_auth() {
+        let allowed = config.allowed_login_methods();
+        let workspaces = config.effective_chatgpt_workspaces();
+        return validate_auth_restrictions(Some(&allowed), workspaces.as_deref(), &auth)
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::PermissionDenied, message));
+    }
+
     if let Some(required_method) = config.forced_login_method {
         let method_violation = match (required_method, auth.auth_mode()) {
             (ForcedLoginMethod::Api, AuthMode::ApiKey)
@@ -1502,6 +1522,20 @@ async fn load_auth(
         .await?;
         if let CodexAuth::PersonalAccessToken(auth) = &auth {
             ensure_auth_workspace_allowed(forced_chatgpt_workspace_id, auth.account_id())?;
+        }
+        return Ok(Some(auth));
+    }
+
+    // Environment credentials override persisted credentials without touching a store.
+    if auth_mode_is_allowed(allowed_login_methods, AuthMode::ChatgptAuthTokens)
+        && let Some(mut auth) = super::chatgpt_env::auth_from_env()?
+    {
+        validate_auth_restrictions(allowed_login_methods, forced_chatgpt_workspace_id, &auth)
+            .map_err(|message| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
+            })?;
+        if let CodexAuth::ChatgptAuthTokens(tokens) = &mut auth {
+            tokens.environment_managed = true;
         }
         return Ok(Some(auth));
     }
@@ -2754,6 +2788,14 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
     ) -> Result<Arc<Self>, AuthManagerInitializationError> {
         let external_auth = WorkloadIdentityExternalAuth::from_process_config(&auth_config)?;
+        // The legacy constructor tolerates storage errors. An explicitly configured
+        // environment token must instead fail closed with an actionable error.
+        if external_auth.is_none() && super::chatgpt_env::is_chatgpt_auth_token_configured() {
+            auth_config
+                .load_auth(enable_codex_api_key_env)
+                .await
+                .map_err(RefreshTokenError::from)?;
+        }
         let mut manager = Self::new_from_auth_config(auth_config, enable_codex_api_key_env).await;
         manager.workload_identity_selected = external_auth.is_some();
         let manager = Arc::new(manager);
@@ -2865,6 +2907,12 @@ impl AuthManager {
                 .await
         } else {
             match attempted_auth.as_ref() {
+                Some(auth) if auth.is_environment_chatgpt_auth() => {
+                    Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                        RefreshTokenFailedReason::Other,
+                        "CHATGPT_AUTH_TOKEN was rejected and cannot be refreshed by Codex; supply a fresh access token and restart Codex",
+                    )))
+                }
                 Some(CodexAuth::Chatgpt(chatgpt_auth)) => {
                     let token_data = chatgpt_auth.current_token_data().ok_or_else(|| {
                         RefreshTokenError::Transient(std::io::Error::other(
@@ -2932,6 +2980,16 @@ impl AuthManager {
     }
 
     fn ensure_logout_allowed(&self) -> std::io::Result<()> {
+        if self
+            .auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_environment_chatgpt_auth)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "CHATGPT_AUTH_TOKEN is managed by the launching environment; unset it and restart Codex to log out. Cached credentials were left unchanged.",
+            ));
+        }
         if self.workload_identity_selected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
