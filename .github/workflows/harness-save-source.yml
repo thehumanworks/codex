@@ -1,0 +1,80 @@
+name: Save harness source checkpoint
+
+on:
+  push:
+    branches: [superfork/harness-final-2026-09-22]
+    paths: [.github/workflows/harness-save-source.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harness-source-checkpoint
+  cancel-in-progress: false
+
+jobs:
+  save:
+    if: github.repository == 'thehumanworks/codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check checkpoint publisher against isolated Git remotes
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s superfork -p test_checkpoint.py -v
+      - name: Merge pinned source with the reviewed semantic port
+        run: |
+          set -euo pipefail
+          git config user.name 'Codex Superfork Integration'
+          git config user.email '178243268+thehumanworks@users.noreply.github.com'
+          git fetch --no-tags --filter=blob:none --unshallow origin superfork/harness-final-2026-09-22
+          git remote add upstream https://github.com/openai/codex.git
+          source=16d35f17ee1b30282e8f85e149ef01536e14dcc5
+          git fetch --no-tags --filter=blob:none upstream "$source"
+          git merge-base --is-ancestor ec3b1ca18f25386d7224c06a74bab6eeef407c6e HEAD
+          if ! git merge-base --is-ancestor "$source" HEAD; then
+            before=$(git rev-parse HEAD)
+            git merge --no-ff --no-commit "$source" || test -f .git/MERGE_HEAD
+            test "$(git rev-parse MERGE_HEAD)" = "$source"
+            export BEFORE="$before"
+            python3 - <<'PY'
+          import os, subprocess
+          paths = {'codex-rs/app-server/src/in_process.rs', 'codex-rs/app-server/src/in_process_event_delivery.rs', 'codex-rs/app-server/src/lib.rs'}
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=U'], text=True).splitlines())
+          assert actual <= paths, f'Unexpected conflicts: {actual - paths}'
+          subprocess.run(['git', 'restore', '--source=' + os.environ['BEFORE'], '--staged', '--worktree', '--', *sorted(paths)], check=True)
+          PY
+            python3 superfork/ports/lossless.py
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('codex-rs/app-server/src/in_process_lossless_tests.rs')
+          text = p.read_text()
+          old = 'sender.notify(ClientNotification::Initialized).await.expect("first command fits");'
+          new = 'sender.notify(ClientNotification::Initialized).expect("first command fits");'
+          assert text.count(old) == 1, 'notify acceptance code drifted'
+          p.write_text(text.replace(old, new))
+          PY
+            test -z "$(git diff --name-only --diff-filter=U)"
+            git add codex-rs/app-server/src
+            git diff --cached --check -- codex-rs/app-server/src
+            git commit -m 'feat(superfork): checkpoint bounded lossless events and two-phase shutdown' -m "Source: openai/codex@$source. Authorship is preserved through the merge parent. Retain current typed envelopes, cancellation, overload errors, explicit outbound shutdown and analytics budget. This is a source checkpoint, not a verification claim."
+          fi
+          git merge-base --is-ancestor "$source" HEAD
+          git merge-base --is-ancestor 4631a92ae60616c02d5c6c58ef3275d5c01c5ba0 HEAD
+      - name: Publish source checkpoint and advance only the integration branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          python3 superfork/checkpoint.py source
+          git push origin HEAD:refs/heads/superfork/harness-final-2026-09-22
+          expected=$(git rev-parse HEAD)
+          observed=$(git ls-remote origin refs/heads/superfork/harness-final-2026-09-22 | cut -f1)
+          test "$expected" = "$observed"
+          printf 'Source-only checkpoint: %s. Behavioural verification remains required.\n' "$observed" >> "$GITHUB_STEP_SUMMARY"
