@@ -79,6 +79,7 @@ with (root / path).open("a") as output:
     output.write('\n#[cfg(test)]\n#[path = "in_process_stores_tests.rs"]\nmod stores_tests;\n')
 
 path = "codex-rs/app-server/src/message_processor.rs"
+edit(path, "use codex_thread_store::QueueStore;", "use codex_thread_store::QueueStore;\nuse codex_thread_store::ThreadStore;")
 edit(path, "    pub(crate) state_db: Option<StateDbHandle>,", "    pub(crate) state_db: Option<StateDbHandle>,\n    pub(crate) thread_store: Option<Arc<dyn ThreadStore>>,")
 edit(path, "            state_db,\n            config_warnings,", "            state_db,\n            thread_store,\n            config_warnings,")
 edit(path, """        let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
