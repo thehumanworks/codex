@@ -39,3 +39,5 @@ Prior work identified `agent-communication-v2`, `app-server-lossless-events`, `a
 ## Execution environment
 
 The connected Ares host returned `tunnel_client_not_seen` (HTTP 404). The conversation container has no Rust toolchain and cannot resolve github.com. GitHub repository writes and GitHub Actions are available, so Actions is the execution route. Builds/tests must have observable runner results before promotion; merely scheduling them is not success.
+
+Preparation note: baseline resolution whitespace validation is scoped to the manually resolved auth file so pre-existing upstream snapshot whitespace does not masquerade as an integration regression.
