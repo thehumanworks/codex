@@ -2,7 +2,7 @@ name: Harness lossless and combined verification
 
 on:
   push:
-    branches: [superfork/harness-delivery-2026-09-22]
+    branches: [superfork/harness-final-2026-09-22]
     paths: [.github/workflows/harness-lossless.yml]
   workflow_dispatch:
 
@@ -56,7 +56,7 @@ jobs:
           git config user.name 'Codex Superfork Integration'
           git config user.email '178243268+thehumanworks@users.noreply.github.com'
           if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
-            git fetch --no-tags --filter=blob:none --unshallow origin superfork/harness-delivery-2026-09-22
+            git fetch --no-tags --filter=blob:none --unshallow origin superfork/harness-final-2026-09-22
           fi
           git remote add upstream https://github.com/openai/codex.git
           source=16d35f17ee1b30282e8f85e149ef01536e14dcc5
@@ -82,6 +82,15 @@ jobs:
           subprocess.run(['git', 'restore', '--source=' + os.environ['BEFORE'], '--staged', '--worktree', '--', *sorted(paths)], check=True)
           PY
             python3 superfork/ports/lossless.py
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('codex-rs/app-server/src/in_process_lossless_tests.rs')
+          text = p.read_text()
+          old = 'sender.notify(ClientNotification::Initialized).await.expect("first command fits");'
+          new = 'sender.notify(ClientNotification::Initialized).expect("first command fits");'
+          assert text.count(old) == 1, 'notify signature/test drifted; review required'
+          p.write_text(text.replace(old, new))
+          PY
             test -z "$(git diff --name-only --diff-filter=U)"
             git add codex-rs/app-server/src
             git diff --cached --check -- codex-rs/app-server/src
@@ -183,7 +192,7 @@ jobs:
           git add superfork/evidence/lossless-checkpoint.json
           git commit -m 'docs(superfork): record executed combined feature acceptance and CLI smoke evidence'
           gh auth setup-git
-          git push origin HEAD:refs/heads/superfork/harness-delivery-2026-09-22
+          git push origin HEAD:refs/heads/superfork/harness-final-2026-09-22
       - name: Complete workspace verification
         run: |
           set -euo pipefail
@@ -211,8 +220,8 @@ jobs:
           PY
           git add superfork/evidence/combined-verification.json
           git commit -m 'docs(superfork): record successful complete workspace verification'
-          git push origin HEAD:refs/heads/superfork/harness-delivery-2026-09-22
-          git ls-remote origin refs/heads/superfork/harness-delivery-2026-09-22 | tee "$RUNNER_TEMP/lossless-evidence/remote-integration.txt"
+          git push origin HEAD:refs/heads/superfork/harness-final-2026-09-22
+          git ls-remote origin refs/heads/superfork/harness-final-2026-09-22 | tee "$RUNNER_TEMP/lossless-evidence/remote-integration.txt"
       - name: Preserve source and logs even when a check fails
         if: always()
         run: |
