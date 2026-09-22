@@ -98,7 +98,7 @@ jobs:
           EOF
           git add superfork/README.md
           git commit -m "docs(superfork): add ranking and integration notes [superfork-bot]" || true
-          git push origin HEAD:superfork/harness-edge-2026-09-22
+          git push --force-with-lease=refs/heads/superfork/harness-edge-2026-09-22:${{ github.sha }} origin HEAD:superfork/harness-edge-2026-09-22
           git archive --format=zip --prefix=codex-superfork/ HEAD > codex-superfork.zip
           sha256sum codex-superfork.zip > codex-superfork.zip.sha256
       - uses: actions/upload-artifact@v4
