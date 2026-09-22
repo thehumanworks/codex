@@ -270,6 +270,7 @@ pub(super) async fn build_test_processor(
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
+        thread_store: None,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(

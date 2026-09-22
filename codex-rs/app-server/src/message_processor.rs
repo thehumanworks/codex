@@ -92,6 +92,7 @@ use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::LocalQueueStore;
 use codex_thread_store::QueueStore;
+use codex_thread_store::ThreadStore;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
@@ -254,6 +255,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) thread_store: Option<Arc<dyn ThreadStore>>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -280,6 +282,7 @@ impl MessageProcessor {
             feedback,
             log_db,
             state_db,
+            thread_store,
             config_warnings,
             session_source,
             auth_manager,
@@ -299,15 +302,22 @@ impl MessageProcessor {
         // The thread store is intentionally process-scoped. Config reloads can
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
-        let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
-        // Queue persistence requires SQLite, so in-memory thread stores and
-        // app servers without a state database do not have a queue backend.
-        let queue_store: Option<Arc<dyn QueueStore>> = match &config.experimental_thread_store {
-            ThreadStoreConfig::Local => state_db.as_ref().map(|state_db| {
-                Arc::new(LocalQueueStore::new(Arc::clone(state_db))) as Arc<dyn QueueStore>
-            }),
-            ThreadStoreConfig::InMemory { .. } => None,
+        // An injected thread store must not accidentally use an unrelated local
+        // SQLite queue. Queue persistence is available only for config-derived
+        // local stores with a state database; custom stores opt out explicitly.
+        let queue_store: Option<Arc<dyn QueueStore>> = if thread_store.is_some() {
+            None
+        } else {
+            match &config.experimental_thread_store {
+                ThreadStoreConfig::Local => state_db.as_ref().map(|state_db| {
+                    Arc::new(LocalQueueStore::new(Arc::clone(state_db))) as Arc<dyn QueueStore>
+                }),
+                ThreadStoreConfig::InMemory { .. } => None,
+            }
         };
+        let thread_store = thread_store.unwrap_or_else(|| {
+            codex_core::thread_store_from_config(config.as_ref(), state_db.clone())
+        });
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);
         let restriction_product = session_source.restriction_product();

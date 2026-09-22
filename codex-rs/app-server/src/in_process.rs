@@ -91,6 +91,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
+use codex_thread_store::ThreadStore;
 pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
 use tokio::sync::mpsc;
@@ -164,6 +165,26 @@ pub struct InProcessStartArgs {
     pub initialize: InitializeParams,
     /// Capacity used for all runtime queues (clamped to at least 1).
     pub channel_capacity: usize,
+}
+
+/// Optional host overrides for the embedded runtime.
+///
+/// Defaults preserve config-derived persistence and the existing transport behavior.
+#[derive(Clone, Default)]
+pub struct InProcessStartOptions {
+    thread_store: Option<Arc<dyn ThreadStore>>,
+}
+
+impl InProcessStartOptions {
+    /// Use a process-scoped store supplied by the embedding host.
+    ///
+    /// Config reloads do not replace it. The host owns this store's durability.
+    /// Persistent message queues are disabled with an injected store because the
+    /// default SQLite queue may belong to a different persistence backend.
+    pub fn with_thread_store(mut self, thread_store: Arc<dyn ThreadStore>) -> Self {
+        self.thread_store = Some(thread_store);
+        self
+    }
 }
 
 /// Event emitted from the app-server to the in-process client.
@@ -369,7 +390,17 @@ impl InProcessClientHandle {
 /// This function sends `initialize` followed by `initialized` before returning
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
-pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    start_with_options(args, InProcessStartOptions::default()).await
+}
+
+/// Starts an embedded runtime with explicit host overrides and the normal handshake.
+///
+/// See [`InProcessStartOptions`] for persistence ownership and queue limitations.
+pub async fn start_with_options(
+    mut args: InProcessStartArgs,
+    options: InProcessStartOptions,
+) -> IoResult<InProcessClientHandle> {
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&args.config.config_layer_stack).await {
         let (path, range) = crate::exec_policy_warning_location(&err);
         args.config_warnings.push(ConfigWarningNotification {
@@ -380,7 +411,7 @@ pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHand
         });
     }
     let initialize = args.initialize.clone();
-    let client = start_uninitialized(args).await?;
+    let client = start_uninitialized(args, options).await?;
 
     let initialize_response = client
         .request(ClientRequest::Initialize {
@@ -419,7 +450,10 @@ async fn run_outbound_router(
     }
 }
 
-async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+async fn start_uninitialized(
+    args: InProcessStartArgs,
+    options: InProcessStartOptions,
+) -> IoResult<InProcessClientHandle> {
     args.config.auth_config().validate()?;
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
@@ -485,6 +519,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 feedback: args.feedback,
                 log_db: args.log_db,
                 state_db: args.state_db,
+                thread_store: options.thread_store,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
@@ -834,10 +869,10 @@ mod tests {
         }
     }
 
-    async fn start_test_client_with_capacity(
+    pub(super) async fn build_test_start_args(
         session_source: SessionSource,
         channel_capacity: usize,
-    ) -> InProcessClientHandle {
+    ) -> (TempDir, InProcessStartArgs) {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
         let state_db = codex_rollout::state_db::try_init(config.as_ref())
@@ -868,6 +903,14 @@ mod tests {
             },
             channel_capacity,
         };
+        (codex_home, args)
+    }
+
+    async fn start_test_client_with_capacity(
+        session_source: SessionSource,
+        channel_capacity: usize,
+    ) -> InProcessClientHandle {
+        let (codex_home, args) = build_test_start_args(session_source, channel_capacity).await;
         let mut client = start(args).await.expect("in-process runtime should start");
         client._test_codex_home = Some(codex_home);
         client
@@ -1062,3 +1105,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "in_process_stores_tests.rs"]
+mod stores_tests;

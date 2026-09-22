@@ -963,6 +963,7 @@ pub async fn run_main_with_transport_options(
             feedback: feedback.clone(),
             log_db,
             state_db: state_db.clone(),
+            thread_store: None,
             config_warnings,
             session_source,
             user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
