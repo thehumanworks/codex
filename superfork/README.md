@@ -1,5 +1,7 @@
 # Personalised harness superfork
 
+For the optional coordination/memory/metrics CLI preset, see [EDGE.md](EDGE.md). It activates existing upstream features without changing your authentication, model or permission settings. The two new embedding APIs remain separate opt-in host APIs.
+
 This fork preserves thehumanworks' ChatGPT environment-authentication changes and
 adds two opt-in embedding capabilities: host-owned thread persistence and bounded,
 lossless in-process app-server events with a two-phase shutdown lifecycle.
