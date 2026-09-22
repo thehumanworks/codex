@@ -1,0 +1,159 @@
+name: Edge preset native verification
+
+on:
+  push:
+    branches: [superfork/edge-launcher-2026-09-22]
+    paths: [.github/workflows/harness-edge-cli.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harness-edge-cli-verification
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'thehumanworks/codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Finalize scope and exercise launcher and checkpoint helpers
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/edge-evidence"
+          git config user.name 'Codex Superfork Integration'
+          git config user.email '178243268+thehumanworks@users.noreply.github.com'
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('superfork/SELECTION.md')
+          text = p.read_text()
+          replacements = {
+              'Status: selected for implementation, **not yet delivered**.': 'Final upstream scope: S1 and S2. Actual verification and promotion status are recorded in `evidence/`. The optional CLI preset is a fork-specific configuration launcher, not a third unreleased upstream implementation.',
+              '| Tool-free helper threads | 4 | 4 | 4.0 | Medium | High on missingness; reviewed gaps require fixes | Include, third checkpoint |': '| Tool-free helper threads | 4 | 4 | 4.0 | Medium–high | Current-core compatibility reviewed | Exclude: broader MCP/context lifecycle port required |',
+              '## Selected source locks and evidence': '## Source locks and semantic review',
+              '### S3 — Tool-free helper threads': '### Excluded after deeper review — Tool-free helper threads',
+              'Acceptance: model-only turns send zero model-visible tools': 'Acceptance required for a future port, not implemented here: model-only turns send zero model-visible tools',
+              'before S3.': 'before combined verification.',
+              '3. Merge S3, repair the four reviewed gaps, generate config schema, and add normal-vs-tool-free integration controls.': '3. Exclude tool-free helpers from this combination. Current MCP runtime projections, extension-context contributors and tool-registry planning differ materially from the source. Closing the reviewed gaps requires a separate broader lifecycle port, not a partial flag merely to meet a quota.',
+          }
+          for old, new in replacements.items():
+              if old in text:
+                  assert text.count(old) == 1, old
+                  text = text.replace(old, new)
+              else:
+                  assert new in text, old
+          p.write_text(text)
+          p = Path('superfork/README.md')
+          text = p.read_text()
+          intro = '\nFor the optional coordination/memory/metrics CLI preset, see [EDGE.md](EDGE.md). It activates existing upstream features without changing your authentication, model or permission settings. The two new embedding APIs remain separate opt-in host APIs.\n'
+          if intro not in text:
+              text = text.replace('# Personalised harness superfork\n', '# Personalised harness superfork\n' + intro, 1)
+          p.write_text(text)
+          PY
+          python3 -m unittest discover -s superfork -p 'test_*.py' -v 2>&1 | tee "$RUNNER_TEMP/edge-evidence/python-tests.log"
+          git add superfork
+          git commit -m 'docs(superfork): finalize compatible scope and document CLI opt-in usage'
+      - name: Save tested launcher and documentation checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git
+          git push origin HEAD:refs/heads/superfork/edge-launcher-2026-09-22
+      - uses: ./.github/actions/setup-ci
+      - name: Native prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap clang lld
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/codex-ci/cargo-target
+          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-edge-${{ github.run_id }}
+          restore-keys: harness-linux-1.95-
+      - name: Format without changing the tested Rust tree
+        run: |
+          set -euo pipefail
+          just fmt 2>&1 | tee "$RUNNER_TEMP/edge-evidence/format.log"
+          git add superfork
+          if ! git diff --cached --quiet; then
+            git commit -m 'style(superfork): format the edge CLI launcher and tests'
+          fi
+          git diff --exit-code
+          test "$(git rev-parse HEAD:codex-rs)" = 5f8fab505a1d147119496b51346a0f618c27c9d3
+          just fmt-check 2>&1 | tee "$RUNNER_TEMP/edge-evidence/format-check.log"
+          python3 -m unittest discover -s superfork -p 'test_*.py' -v 2>&1 | tee "$RUNNER_TEMP/edge-evidence/python-tests.log"
+          git rev-parse HEAD > "$RUNNER_TEMP/edge-evidence/tested-sha.txt"
+      - name: Build actual CLI and check flag resolution without inference
+        run: |
+          set -euo pipefail
+          (cd codex-rs && cargo build --locked -p codex-cli) 2>&1 | tee "$RUNNER_TEMP/edge-evidence/build.log"
+          python3 superfork/verify_edge_cli.py --codex-bin "$CARGO_TARGET_DIR/debug/codex" 2>&1 | tee "$RUNNER_TEMP/edge-evidence/native-cli.log"
+          "$CARGO_TARGET_DIR/debug/codex" --version > "$RUNNER_TEMP/edge-evidence/version.txt"
+      - name: Bind evidence and publish native-verified launcher checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'edge-evidence'
+          result = {
+              'status': 'native-cli-preset-verified-not-default-branch-delivery',
+              'tested_commit': (evidence / 'tested-sha.txt').read_text().strip(),
+              'runtime_code_tree': subprocess.check_output(['git', 'rev-parse', 'HEAD:codex-rs'], text=True).strip(),
+              'workflow_run': os.environ['GITHUB_RUN_ID'],
+              'python_tests': (evidence / 'python-tests.log').read_text(),
+              'native_cli': (evidence / 'native-cli.log').read_text(),
+              'version': (evidence / 'version.txt').read_text().strip(),
+              'source_sha256': {name: hashlib.sha256(Path('superfork', name).read_bytes()).hexdigest() for name in ['edge.py', 'test_edge.py', 'verify_edge_cli.py']},
+              'limitations': ['Existing upstream feature flags are activated; this is not a third ported upstream feature.', 'Linux x86_64 only.', 'No live inference, model-quality, or cross-host messaging test is claimed.'],
+          }
+          Path('superfork/evidence/edge-cli.json').write_text(json.dumps(result, indent=2) + '\n')
+          PY
+          git add superfork/evidence/edge-cli.json
+          git commit -m 'test(superfork): record native CLI flag resolution and user-override controls'
+          gh auth setup-git
+          git push origin HEAD:refs/heads/superfork/edge-launcher-2026-09-22
+          expected=$(git rev-parse HEAD)
+          test "$(git ls-remote origin refs/heads/superfork/edge-launcher-2026-09-22 | cut -f1)" = "$expected"
+      - name: Keep working source and diagnostics
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/edge-evidence"
+          git archive --format=tar.gz --prefix=codex-edge/ HEAD > "$RUNNER_TEMP/edge-evidence/source.tar.gz"
+          git diff HEAD > "$RUNNER_TEMP/edge-evidence/uncommitted.patch"
+          df -h > "$RUNNER_TEMP/edge-evidence/disk.txt"
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        if: always() && steps.cache.outcome == 'success'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/codex-ci/cargo-target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: edge-cli-${{ github.run_id }}
+          path: ${{ runner.temp }}/edge-evidence/
+          retention-days: 14

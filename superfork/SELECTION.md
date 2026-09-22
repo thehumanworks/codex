@@ -1,6 +1,6 @@
 # Candidate selection and implementation contract
 
-Status: selected for implementation, **not yet delivered**. Baseline: `4631a92ae60616c02d5c6c58ef3275d5c01c5ba0`, containing fork `e3bd229c57231a4cf985cfd3100ff982dcd8cb7d` and upstream `d3e584093222018fc27919403aea149ccfd3bb38`.
+Final upstream scope: S1 and S2. Actual verification and promotion status are recorded in `evidence/`. The optional CLI preset is a fork-specific configuration launcher, not a third unreleased upstream implementation. Baseline: `4631a92ae60616c02d5c6c58ef3275d5c01c5ba0`, containing fork `e3bd229c57231a4cf985cfd3100ff982dcd8cb7d` and upstream `d3e584093222018fc27919403aea149ccfd3bb38`.
 
 ## Discovery coverage
 
@@ -20,13 +20,13 @@ Scores are engineering judgments, not measured productivity gains. Harness value
 | Detached asynchronous command hooks | 5 | 4 | 4.5 | High if old implementation restored | High | Exclude: capability already in baseline |
 | External-agent memory import | 5 | 4 | 4.5 | High if old migration protocol restored | High | Exclude: capability already in baseline |
 | Reconcile running-thread history on resume | 5 | 3 | 4.0 | High | Medium | Exclude: broad history/compaction reconstruction port; lower compatibility |
-| Tool-free helper threads | 4 | 4 | 4.0 | Medium | High on missingness; reviewed gaps require fixes | Include, third checkpoint |
+| Tool-free helper threads | 4 | 4 | 4.0 | Medium–high | Current-core compatibility reviewed | Exclude: broader MCP/context lifecycle port required |
 | Exact tool timing metadata | 4 | 3 | 3.5 | Medium–high | Medium | Exclude: lower priority and cross-transport metadata changes |
 | Preserve child environments on reload | 5 | 2 | 3.5 | Medium | High on relevant baseline behavior | Exclude: baseline already preserves explicit/inherited selections |
 | Agent communication telemetry | 4 | 3 | 3.5 | High privacy regression in old branch | High | Exclude: existing communication telemetry; old branch restores plaintext logging |
 | Contributor TUI SIGINT handling | 2 | 1 | 1.5 | Medium against substantially newer TUI | Low on current applicability | Exclude: narrow terminal fix, not a leading novel harness capability |
 
-## Selected source locks and evidence
+## Source locks and semantic review
 
 ### S1 — Injectable thread storage
 
@@ -60,7 +60,7 @@ Dependencies/risks: S1 options API; shared request/event queues; source predates
 
 Acceptance: saturation preserves notification order with no `Lagged` event in lossless mode; best-effort behavior remains compatible; accepted messages complete/drain during two-phase shutdown; request cancellation and overload paths retain their contracts; shutdown is bounded; combined store injection and lossless event consumption work together. Source-head CI includes successful required checks from June 2026, but those results do not validate this newer combined baseline.
 
-### S3 — Tool-free helper threads
+### Excluded after deeper review — Tool-free helper threads
 
 Source PR: https://github.com/openai/codex/pull/31922
 
@@ -70,7 +70,7 @@ Neither `Feature::ToolFree` nor `tool_free` exists in the combined baseline. The
 
 The PR reports scoped tests and a manual control, but its actual diff adds **no integration tests**. Four automated review findings were read: initial context can still advertise skills/plugins; startup still warms plugin/skill state; per-thread MCP status collection can start configured servers; and outbound-request integration coverage is absent. The port must address these findings rather than treating the source as ready-made.
 
-Acceptance: model-only turns send zero model-visible tools and no installed skill/plugin guidance; normal sessions retain tools and guidance; configured MCP processes do not start on tool-free startup, refresh, or per-thread status; configuration remains opt-in/default-off and the generated schema is updated. Add actual core-suite integration tests using existing `TestCodex` fixtures. This mode is **not a security sandbox** and must not be described as suppressing every trusted hook or host-side action.
+Acceptance required for a future port, not implemented here: model-only turns send zero model-visible tools and no installed skill/plugin guidance; normal sessions retain tools and guidance; configured MCP processes do not start on tool-free startup, refresh, or per-thread status; configuration remains opt-in/default-off and the generated schema is updated. Add actual core-suite integration tests using existing `TestCodex` fixtures. This mode is **not a security sandbox** and must not be described as suppressing every trusted hook or host-side action.
 
 ## Excluded source locks and reasons
 
@@ -86,7 +86,7 @@ Acceptance: model-only turns send zero model-visible tools and no installed skil
 ## Incremental integration and verification order
 
 1. Merge S1 with a reviewed port preserving current auth/config initialization and queue-store coherence. Run its behavioral tests plus embedded-runtime regressions before S2.
-2. Merge the remaining S2 source history with current cancellation/notification/shutdown semantics preserved. Test saturation, ordering, accepted-message drain, timeouts, and interaction with S1 before S3.
-3. Merge S3, repair the four reviewed gaps, generate config schema, and add normal-vs-tool-free integration controls.
+2. Merge the remaining S2 source history with current cancellation/notification/shutdown semantics preserved. Test saturation, ordering, accepted-message drain, timeouts, and interaction with S1 before combined verification.
+3. Exclude tool-free helpers from this combination. Current MCP runtime projections, extension-context contributors and tool-registry planning differ materially from the source. Closing the reviewed gaps requires a separate broader lifecycle port, not a partial flag merely to meet a quota.
 4. Run required scoped formatting/lint/build/test checks, the complete suite because core changes, CLI smoke checks, and the existing fork's synthetic environment-auth acceptance runner. Record exact commands, exit statuses, test counts, and any skipped/blocked platform checks.
 5. Commit evidence and build/run/enable instructions. Only then promote the verified integration to `main` without force and re-read the remote SHA. If checks fail, preserve the pushed work and report the exact gate; do not count a clean merge or scheduled workflow as success.

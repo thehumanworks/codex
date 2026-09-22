@@ -1,14 +1,16 @@
 > [!NOTE]
 > **thehumanworks fork:** supports `CHATGPT_AUTH_TOKEN` in interactive Codex and `codex exec`, without `auth.json`. `CHATGPT_ACCOUNT_ID` is derived from the token when available. See [fork usage and verification](FORK.md).
+>
+> **Harness extensions:** [build this fork and its companion executables](superfork/BUILDING.md), use the [opt-in edge CLI preset](superfork/EDGE.md), or embed the [injectable storage and lossless event APIs](superfork/README.md). [Selection and source provenance](superfork/SELECTION.md) and [executed verification evidence](superfork/evidence/) are committed. The upstream installers below do **not** install these fork changes.
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
 </p>
 </br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+For Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
+</br>For the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
+</br>For the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
 
 ---
 
