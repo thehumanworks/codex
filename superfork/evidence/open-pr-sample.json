@@ -1,10 +1,21 @@
 {
   "coverage": "Bounded at 300 open PRs, ordered by update time for discovery only. Inventory is not a value ranking or an exhaustive code review.",
   "pages_fetched": 2,
-  "count": 169,
+  "count": 170,
   "reached_last_page": true,
   "errors": [],
   "pull_requests": [
+    {
+      "number": 47272,
+      "title": "Allow Guardian sync review across compaction hash differences",
+      "url": "https://github.com/openai/codex/pull/47272",
+      "draft": false,
+      "updated_at": "2026-09-22T12:37:22Z",
+      "head_ref": "copyberry/codex-internal-to-codex-oss/bbc4f5a2e697f832f815dcf8bda4d4a652f06b8a",
+      "head_sha": "99784bd09b234ce11d8e91041d445e3eb49a609a",
+      "head_repository": "openai/codex",
+      "base_ref": "main"
+    },
     {
       "number": 35882,
       "title": "Bump rust-toolchain from 1.95.0 to 1.97.1 in /codex-rs",
