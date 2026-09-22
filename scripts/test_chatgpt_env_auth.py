@@ -21,6 +21,7 @@ import time
 import unittest
 
 BINARY = None
+PACKAGED_TUI = False
 REPLY = "environment-auth-verified"
 
 
@@ -145,6 +146,26 @@ class EnvironmentAuthTests(unittest.TestCase):
             }
         )
         self.configure()
+        if PACKAGED_TUI:
+            settings = self.home / "app-server-daemon" / "settings.json"
+            settings.parent.mkdir()
+            settings.write_text(json.dumps({
+                "remoteControlEnabled": False,
+                "shutdownGraceSeconds": 5,
+                "updater": {"autoUpdateEnabled": False},
+            }))
+            self.addCleanup(self.stop_test_daemon)
+
+    def stop_test_daemon(self):
+        if not (self.home / "app-server-daemon" / "daemon.pid").exists():
+            return
+        result = subprocess.run(
+            [str(BINARY), "app-server", "daemon", "stop"],
+            cwd=self.cwd, env=self.env, capture_output=True, text=True, timeout=30,
+        )
+        output = result.stdout + result.stderr
+        self.assertNotIn(TOKEN, output, "credential leaked in daemon output")
+        self.assertEqual(result.returncode, 0, output)
 
     def configure(self, extra="", store="file"):
         (self.home / "config.toml").write_text(
@@ -361,7 +382,11 @@ class EnvironmentAuthTests(unittest.TestCase):
                     {"clientInfo": {"name": "env-auth-test", "version": "1"}},
                 ),
             )
+            # Complete the public initialize/initialized handshake before RPCs.
+            process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "initialized"}) + "\n")
+            process.stdin.flush()
             account = rpc(2, "account/read", {"refreshToken": False})
+            self.assertIn("result", account)
             self.assertEqual(account["result"]["account"]["type"], "chatgpt")
             response = rpc(3, "account/logout")
             self.assertIn("unset it", response["error"]["message"])
@@ -389,7 +414,7 @@ class EnvironmentAuthTests(unittest.TestCase):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
         process = subprocess.Popen(
-            [str(BINARY), "--no-alt-screen", "hello"],
+            [str(BINARY), *([] if PACKAGED_TUI else ["--no-daemon"]), "--no-alt-screen", "hello"],
             cwd=self.cwd,
             env=self.env,
             stdin=slave,
@@ -426,6 +451,12 @@ class EnvironmentAuthTests(unittest.TestCase):
             self.assertIn(REPLY, text)
             self.assertNotIn(TOKEN, text)
             self.assertNotIn("Sign in with ChatGPT", text)
+            if PACKAGED_TUI:
+                self.assertNotIn("Running without the shared background server", text)
+                self.assertTrue(
+                    (self.home / "app-server-daemon" / "daemon.pid").is_file(),
+                    "packaged TUI did not start its isolated shared daemon",
+                )
             self.assert_request_auth()
         finally:
             if process.poll() is None:
@@ -438,12 +469,16 @@ class EnvironmentAuthTests(unittest.TestCase):
                     process.terminate()
                     process.wait(timeout=5)
             os.close(master)
+        if PACKAGED_TUI:
+            self.stop_test_daemon()
         self.assert_no_auth_file()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex-bin", required=True, type=Path)
+    parser.add_argument("--packaged-tui", action="store_true", help="Test shared-server TUI using a complete local package")
     args, remaining = parser.parse_known_args()
     BINARY = args.codex_bin.resolve(strict=True)
+    PACKAGED_TUI = args.packaged_tui
     unittest.main(argv=[__file__, *remaining], verbosity=2)
