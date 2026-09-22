@@ -1,0 +1,219 @@
+name: Combined harness completion
+
+on:
+  push:
+    branches: [superfork/combined-2026-09-22]
+    paths: [.github/workflows/harness-completion.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harness-combined-completion
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'thehumanworks/codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Preserve source identity and adapt all existing authentication controls
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/combined-evidence"
+          echo "EVIDENCE=$RUNNER_TEMP/combined-evidence" >> "$GITHUB_ENV"
+          git config user.name 'Codex Superfork Integration'
+          git config user.email '178243268+thehumanworks@users.noreply.github.com'
+          git fetch --no-tags --filter=blob:none --unshallow origin superfork/combined-2026-09-22
+          for source in e3bd229c57231a4cf985cfd3100ff982dcd8cb7d d3e584093222018fc27919403aea149ccfd3bb38 16d35f17ee1b30282e8f85e149ef01536e14dcc5 fda37a73eccdd621baa38351112f3e080d26280d 01d7837ce29c5a85302088919e1fe0b6c97f913a; do
+            git merge-base --is-ancestor "$source" HEAD
+          done
+          test "$(git rev-parse HEAD:codex-rs)" = 5f8fab505a1d147119496b51346a0f618c27c9d3
+          if ! grep -q 'PACKAGED_TUI = False' scripts/test_chatgpt_env_auth.py; then
+            python3 superfork/ports/update_auth_smoke.py
+          fi
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          source = Path('scripts/test_chatgpt_env_auth.py').read_text()
+          tree = ast.parse(source)
+          assert len([n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name.startswith('test_')]) == 17
+          assert 'packaged TUI did not start its isolated shared daemon' in source
+          compile(source, 'scripts/test_chatgpt_env_auth.py', 'exec')
+          PY
+          git add scripts/test_chatgpt_env_auth.py
+          if ! git diff --cached --quiet; then
+            git commit -m 'test(auth): complete initialization and verify both embedded and packaged TUI modes'
+          fi
+          cat > "$RUNNER_TEMP/publish-combined.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          gh auth setup-git
+          git push origin HEAD:refs/heads/superfork/combined-2026-09-22
+          sha=$(git rev-parse HEAD)
+          test "$(git ls-remote origin refs/heads/superfork/combined-2026-09-22 | cut -f1)" = "$sha"
+          printf '\nCommitted and verified remote checkpoint: `%s`\n' "$sha" >> "$GITHUB_STEP_SUMMARY"
+          SH
+      - name: Push actual authentication-test adaptation before builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/publish-combined.sh"
+      - uses: ./.github/actions/setup-ci
+      - name: Native prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap clang lld ripgrep
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/codex-ci/cargo-target
+          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-completion-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: harness-linux-1.95-
+      - name: Format the Python controls and confirm accepted runtime is unchanged
+        run: |
+          set -euo pipefail
+          just fmt 2>&1 | tee "$EVIDENCE/format.log"
+          git add scripts/test_chatgpt_env_auth.py superfork
+          if ! git diff --cached --quiet; then
+            git commit -m 'style(superfork): format final authentication and verification controls'
+          fi
+          git diff --exit-code
+          test "$(git rev-parse HEAD:codex-rs)" = 5f8fab505a1d147119496b51346a0f618c27c9d3
+          just fmt-check 2>&1 | tee "$EVIDENCE/format-check.log"
+          python3 -m unittest discover -s superfork -p 'test_*.py' -v 2>&1 | tee "$EVIDENCE/helpers.log"
+          git rev-parse HEAD > "$EVIDENCE/tested-sha.txt"
+          rustc --version > "$EVIDENCE/toolchain.txt"
+          cargo --version >> "$EVIDENCE/toolchain.txt"
+          uname -a >> "$EVIDENCE/toolchain.txt"
+      - name: Push formatted final control checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/publish-combined.sh"
+      - name: Build all workspace executable prerequisites once
+        id: binaries
+        run: |
+          set -euo pipefail
+          (cd codex-rs && cargo build --locked --workspace --bins) 2>&1 | tee "$EVIDENCE/workspace-binaries.log"
+          for binary in codex codex-code-mode-host bwrap test_stdio_server; do
+            test -x "$CARGO_TARGET_DIR/debug/$binary"
+            sha256sum "$CARGO_TARGET_DIR/debug/$binary"
+          done | tee "$EVIDENCE/fixture-binaries.sha256"
+      - name: Verify embedded source authentication without changing auth assertions
+        id: source_auth
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          TMPDIR=/tmp python3 scripts/test_chatgpt_env_auth.py --codex-bin "$CARGO_TARGET_DIR/debug/codex" 2>&1 | tee "$EVIDENCE/source-auth.log"
+          python3 superfork/complete_verification.py source-auth
+          git add superfork/evidence/completion-source-auth.json
+          git commit -m 'test(superfork): verify all 17 source-mode authentication controls'
+      - name: Push successful embedded authentication checkpoint
+        if: steps.source_auth.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/publish-combined.sh"
+      - name: Assemble a complete local package and verify shared-daemon authentication
+        id: packaged_auth
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/local-codex-package"
+          python3 scripts/build_codex_package.py --target x86_64-unknown-linux-gnu \
+            --package-dir "$package" \
+            --entrypoint-bin "$CARGO_TARGET_DIR/debug/codex" \
+            --code-mode-host-bin "$CARGO_TARGET_DIR/debug/codex-code-mode-host" \
+            --bwrap-bin "$CARGO_TARGET_DIR/debug/bwrap" --rg-bin /usr/bin/rg 2>&1 | tee "$EVIDENCE/package-build.log"
+          cp "$package/codex-package.json" "$EVIDENCE/package-manifest.json"
+          sha256sum "$package/bin/codex" "$package/bin/codex-code-mode-host" "$package/codex-resources/bwrap" > "$EVIDENCE/package-binaries.sha256"
+          TMPDIR=/tmp python3 scripts/test_chatgpt_env_auth.py --codex-bin "$package/bin/codex" --packaged-tui 2>&1 | tee "$EVIDENCE/packaged-auth.log"
+          python3 superfork/verify_edge_cli.py --codex-bin "$package/bin/codex" 2>&1 | tee "$EVIDENCE/edge-native.log"
+          python3 superfork/complete_verification.py packaged-auth
+          git add superfork/evidence/completion-packaged-auth.json
+          git commit -m 'test(superfork): verify packaged shared-daemon authentication and edge controls'
+      - name: Push successful packaged authentication checkpoint
+        if: steps.packaged_auth.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/publish-combined.sh"
+      - name: Execute the full workspace independently of smoke-test outcomes
+        id: workspace
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          just test --locked 2>&1 | tee "$EVIDENCE/workspace.log"
+          python3 superfork/complete_verification.py workspace
+          git add superfork/evidence/completion-workspace.json
+          git commit -m 'test(superfork): record executed complete workspace regression results'
+      - name: Push successful full-workspace checkpoint
+        if: steps.workspace.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/publish-combined.sh"
+      - name: Require every final verification stage to pass
+        env:
+          SOURCE_AUTH_OUTCOME: ${{ steps.source_auth.outcome }}
+          PACKAGED_AUTH_OUTCOME: ${{ steps.packaged_auth.outcome }}
+          WORKSPACE_OUTCOME: ${{ steps.workspace.outcome }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_AUTH_OUTCOME" = success
+          test "$PACKAGED_AUTH_OUTCOME" = success
+          test "$WORKSPACE_OUTCOME" = success
+          python3 superfork/complete_verification.py combined
+          git add superfork/evidence/completion-combined.json
+          git commit -m 'test(superfork): bind successful combined runtime launcher authentication and workspace evidence'
+      - name: Push final verified integration without prematurely changing main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/publish-combined.sh"
+      - name: Preserve final source and all diagnostic outcomes
+        if: always()
+        env:
+          SOURCE_AUTH_OUTCOME: ${{ steps.source_auth.outcome }}
+          PACKAGED_AUTH_OUTCOME: ${{ steps.packaged_auth.outcome }}
+          WORKSPACE_OUTCOME: ${{ steps.workspace.outcome }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/combined-evidence"
+          printf 'source_auth=%s\npackaged_auth=%s\nworkspace=%s\n' "$SOURCE_AUTH_OUTCOME" "$PACKAGED_AUTH_OUTCOME" "$WORKSPACE_OUTCOME" > "$RUNNER_TEMP/combined-evidence/outcomes.txt"
+          git archive --format=tar.gz --prefix=codex-combined/ HEAD > "$RUNNER_TEMP/combined-evidence/source.tar.gz"
+          git log -15 --format=fuller > "$RUNNER_TEMP/combined-evidence/commits.txt"
+          git diff HEAD > "$RUNNER_TEMP/combined-evidence/uncommitted.patch"
+          df -h > "$RUNNER_TEMP/combined-evidence/disk.txt"
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        if: always() && steps.cache.outcome == 'success'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/codex-ci/cargo-target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: harness-completion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/combined-evidence/
+          retention-days: 14
