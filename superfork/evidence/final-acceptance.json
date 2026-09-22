@@ -1,38 +1,38 @@
 {
   "stage": "acceptance",
   "status": "stage-passed-not-default-branch-delivery",
-  "tested_commit": "b466a72ce3faa9f8bedfa0152fb42d77d5a24c25",
+  "tested_commit": "d3253df5ce1a929b888ca450fd0ba2d1d50005b0",
   "tested_code_tree": "5f8fab505a1d147119496b51346a0f618c27c9d3",
-  "workflow_run": "35731608136",
+  "workflow_run": "35735401977",
   "platform": "Linux x86_64",
   "acceptance": {
-    "summary": "Summary [   1.960s] 17 tests run: 17 passed, 350 skipped",
+    "summary": "Summary [   2.286s] 17 tests run: 17 passed, 350 skipped",
     "tests_run": 17,
     "retries": []
   },
   "repetitions": [
     {
-      "summary": "Summary [   0.866s] 9 tests run: 9 passed, 358 skipped",
+      "summary": "Summary [   0.886s] 9 tests run: 9 passed, 358 skipped",
       "tests_run": 9,
       "retries": []
     },
     {
-      "summary": "Summary [   0.846s] 9 tests run: 9 passed, 358 skipped",
+      "summary": "Summary [   0.876s] 9 tests run: 9 passed, 358 skipped",
       "tests_run": 9,
       "retries": []
     },
     {
-      "summary": "Summary [   0.890s] 9 tests run: 9 passed, 358 skipped",
+      "summary": "Summary [   0.848s] 9 tests run: 9 passed, 358 skipped",
       "tests_run": 9,
       "retries": []
     },
     {
-      "summary": "Summary [   0.844s] 9 tests run: 9 passed, 358 skipped",
+      "summary": "Summary [   0.823s] 9 tests run: 9 passed, 358 skipped",
       "tests_run": 9,
       "retries": []
     },
     {
-      "summary": "Summary [   0.843s] 9 tests run: 9 passed, 358 skipped",
+      "summary": "Summary [   0.839s] 9 tests run: 9 passed, 358 skipped",
       "tests_run": 9,
       "retries": []
     }
