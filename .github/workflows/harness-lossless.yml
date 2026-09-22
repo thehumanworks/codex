@@ -109,6 +109,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash superfork/publish_stage.sh acceptance
+      - name: Build the cross-crate executable fixtures
+        run: |
+          set -euo pipefail
+          (cd codex-rs && cargo build --locked -p codex-cli -p codex-code-mode-host -p codex-rmcp-client --bins) 2>&1 | tee "$EVIDENCE/fixture-build.log"
+          for binary in codex codex-code-mode-host test_stdio_server; do
+            test -x "$CARGO_TARGET_DIR/debug/$binary"
+            sha256sum "$CARGO_TARGET_DIR/debug/$binary"
+          done | tee "$EVIDENCE/fixture-binaries.txt"
       - name: Full affected app-server and client suites
         run: |
           set -euo pipefail
@@ -138,6 +146,7 @@ jobs:
       - name: Complete workspace verification
         run: |
           set -euo pipefail
+          (cd codex-rs && cargo build --locked --workspace --bins) 2>&1 | tee "$EVIDENCE/workspace-binaries.log"
           just test --locked 2>&1 | tee "$EVIDENCE/workspace.log"
           python3 superfork/record_verification.py workspace
           git add superfork/evidence/final-workspace.json
