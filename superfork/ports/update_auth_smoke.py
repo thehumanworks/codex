@@ -15,7 +15,7 @@ replacements = [
     ("BINARY = None\n", "BINARY = None\nPACKAGED_TUI = False\n"),
     (
         "        self.configure()\n\n    def configure(",
-        '''        self.configure()
+        """        self.configure()
         if PACKAGED_TUI:
             settings = self.home / "app-server-daemon" / "settings.json"
             settings.parent.mkdir()
@@ -37,32 +37,32 @@ replacements = [
         self.assertNotIn(TOKEN, output, "credential leaked in daemon output")
         self.assertEqual(result.returncode, 0, output)
 
-    def configure(''',
+    def configure(""",
     ),
     (
         '            account = rpc(2, "account/read", {"refreshToken": False})\n',
-        '''            # Complete the public initialize/initialized handshake before RPCs.
+        """            # Complete the public initialize/initialized handshake before RPCs.
             process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "initialized"}) + "\\n")
             process.stdin.flush()
             account = rpc(2, "account/read", {"refreshToken": False})
             self.assertIn("result", account)
-''',
+""",
     ),
     (
         '            [str(BINARY), "--no-alt-screen", "hello"],\n',
-        '''            [str(BINARY), *([] if PACKAGED_TUI else ["--no-daemon"]), "--no-alt-screen", "hello"],
-''',
+        """            [str(BINARY), *([] if PACKAGED_TUI else ["--no-daemon"]), "--no-alt-screen", "hello"],
+""",
     ),
     (
         '            self.assertNotIn("Sign in with ChatGPT", text)\n',
-        '''            self.assertNotIn("Sign in with ChatGPT", text)
+        """            self.assertNotIn("Sign in with ChatGPT", text)
             if PACKAGED_TUI:
                 self.assertNotIn("Running without the shared background server", text)
                 self.assertTrue(
                     (self.home / "app-server-daemon" / "daemon.pid").is_file(),
                     "packaged TUI did not start its isolated shared daemon",
                 )
-''',
+""",
     ),
     (
         "            os.close(master)\n        self.assert_no_auth_file()\n",
@@ -70,9 +70,9 @@ replacements = [
     ),
     (
         '    parser.add_argument("--codex-bin", required=True, type=Path)\n',
-        '''    parser.add_argument("--codex-bin", required=True, type=Path)
+        """    parser.add_argument("--codex-bin", required=True, type=Path)
     parser.add_argument("--packaged-tui", action="store_true", help="Test shared-server TUI using a complete local package")
-''',
+""",
     ),
     (
         "    BINARY = args.codex_bin.resolve(strict=True)\n",
@@ -85,4 +85,6 @@ for old, new in replacements:
     text = text.replace(old, new)
 compile(text, str(path), "exec")
 path.write_text(text)
-print("Adapted handshake and explicit TUI modes; all 17 authentication controls remain.")
+print(
+    "Adapted handshake and explicit TUI modes; all 17 authentication controls remain."
+)

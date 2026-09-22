@@ -149,11 +149,15 @@ class EnvironmentAuthTests(unittest.TestCase):
         if PACKAGED_TUI:
             settings = self.home / "app-server-daemon" / "settings.json"
             settings.parent.mkdir()
-            settings.write_text(json.dumps({
-                "remoteControlEnabled": False,
-                "shutdownGraceSeconds": 5,
-                "updater": {"autoUpdateEnabled": False},
-            }))
+            settings.write_text(
+                json.dumps(
+                    {
+                        "remoteControlEnabled": False,
+                        "shutdownGraceSeconds": 5,
+                        "updater": {"autoUpdateEnabled": False},
+                    }
+                )
+            )
             self.addCleanup(self.stop_test_daemon)
 
     def stop_test_daemon(self):
@@ -161,7 +165,11 @@ class EnvironmentAuthTests(unittest.TestCase):
             return
         result = subprocess.run(
             [str(BINARY), "app-server", "daemon", "stop"],
-            cwd=self.cwd, env=self.env, capture_output=True, text=True, timeout=30,
+            cwd=self.cwd,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         output = result.stdout + result.stderr
         self.assertNotIn(TOKEN, output, "credential leaked in daemon output")
@@ -383,7 +391,9 @@ class EnvironmentAuthTests(unittest.TestCase):
                 ),
             )
             # Complete the public initialize/initialized handshake before RPCs.
-            process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "initialized"}) + "\n")
+            process.stdin.write(
+                json.dumps({"jsonrpc": "2.0", "method": "initialized"}) + "\n"
+            )
             process.stdin.flush()
             account = rpc(2, "account/read", {"refreshToken": False})
             self.assertIn("result", account)
@@ -414,7 +424,12 @@ class EnvironmentAuthTests(unittest.TestCase):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
         process = subprocess.Popen(
-            [str(BINARY), *([] if PACKAGED_TUI else ["--no-daemon"]), "--no-alt-screen", "hello"],
+            [
+                str(BINARY),
+                *([] if PACKAGED_TUI else ["--no-daemon"]),
+                "--no-alt-screen",
+                "hello",
+            ],
             cwd=self.cwd,
             env=self.env,
             stdin=slave,
@@ -477,7 +492,11 @@ class EnvironmentAuthTests(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex-bin", required=True, type=Path)
-    parser.add_argument("--packaged-tui", action="store_true", help="Test shared-server TUI using a complete local package")
+    parser.add_argument(
+        "--packaged-tui",
+        action="store_true",
+        help="Test shared-server TUI using a complete local package",
+    )
     args, remaining = parser.parse_known_args()
     BINARY = args.codex_bin.resolve(strict=True)
     PACKAGED_TUI = args.packaged_tui
