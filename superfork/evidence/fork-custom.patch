@@ -1,0 +1,1188 @@
+diff --git a/FORK.md b/FORK.md
+new file mode 100644
+index 000000000..ec4c8bd53
+--- /dev/null
++++ b/FORK.md
+@@ -0,0 +1,80 @@
++# thehumanworks Codex: ChatGPT authentication from the environment
++
++This is an independently maintained fork of `openai/codex`. The environment-authentication change is maintained here; it is not an upstream pull request. Based on upstream commit `7a6f469dcff1337786aae046df2d899accea59ab` (11 September 2026).
++
++## Use
++
++Supply a **ChatGPT OAuth access-token JWT** to the Codex process. It is not an OpenAI API key, a refresh token, an ID token, a browser cookie, or an `Authorization: Bearer ...` header. Token validity and authorization are ultimately checked by the service.
++
++```bash
++# Prefer injecting this variable with your secret manager. Do not commit tokens.
++export CHATGPT_AUTH_TOKEN="<ChatGPT access token>"
++
++# Normally omit CHATGPT_ACCOUNT_ID: Codex derives it from the access-token claims.
++unset CHATGPT_ACCOUNT_ID
++
++codex                                  # Interactive terminal UI
++codex exec "Explain this repository"    # Headless execution
++codex exec --json "Explain this repo"   # Headless JSON event stream
++codex login status
++```
++
++When active, `codex login status` reports `Logged in using ChatGPT (CHATGPT_AUTH_TOKEN)`. A separate `codex login` step is unnecessary; running it simply checks the supplied environment credentials rather than opening a browser or writing a credential file. The status command checks local credential usability, not server-side acceptance.
++
++`CHATGPT_ACCOUNT_ID` is required only when the token does not contain a `chatgpt_account_id` in its `https://api.openai.com/auth` claims object. It may also explicitly select the intended account/workspace:
++
++```bash
++export CHATGPT_ACCOUNT_ID="<account/workspace ID>"
++codex
++```
++
++The explicit non-empty account ID overrides the embedded account claim. It must belong to an account the token is authorized to use. The service still enforces access. This is a ChatGPT account/workspace ID, not an OpenAI API organization ID.
++
++PowerShell uses the same variables:
++
++```powershell
++$env:CHATGPT_AUTH_TOKEN = "<ChatGPT access token>"
++Remove-Item Env:CHATGPT_ACCOUNT_ID -ErrorAction SilentlyContinue
++codex
++codex exec "Explain this repository"
++```
++
++## Behavior and precedence
++
++- Both CLI modes use the shared `codex-login` authentication loader, including the interactive UI's local app-server. No `auth.json`, ID token, or refresh token is required. The new loader does not write file or keyring credentials; ordinary Codex configuration, session history, and logs may still be written.
++- Upstream's enabled `CODEX_API_KEY` override and explicit in-memory app-server credentials retain their precedence. The ChatGPT environment token then takes precedence over `CODEX_ACCESS_TOKEN` and saved file/keyring credentials. Host-configured workload identity retains control of its authentication.
++- An unset or whitespace-only token leaves existing authentication behavior unchanged. An account ID without a token has no effect. Surrounding token/account whitespace is trimmed.
++- A configured malformed or expired token produces an actionable error instead of silently choosing cached credentials. Missing account metadata requests only `CHATGPT_ACCOUNT_ID`. Errors do not echo the token. Configured login-method/workspace restrictions remain enforced.
++- These are externally managed access tokens. Codex has no refresh token and does not perform an OAuth refresh for them. Replace an expired or rejected token and restart the process. Environment changes in a parent shell cannot update a running child process.
++- `codex logout` and local app-server logout cannot unset the launching shell's environment. They report that the variable must be unset and leave cached credentials unchanged. Run `unset CHATGPT_AUTH_TOKEN CHATGPT_ACCOUNT_ID` (or remove the PowerShell environment variables), restart Codex, and then use normal logout to remove a previously cached login.
++- A remote or already-running app-server has its own environment. Supply credentials to the server process and restart it when changing tokens; setting variables only on a remote client does not reauthenticate an existing server.
++
++The token remains a secret while in the process environment. Use a trusted secret-injection mechanism and appropriate host/process access controls. `CHATGPT_AUTH_TOKEN` is excluded from model-reachable child environments and shell-snapshot exports, even when ordinary default secret exclusions are disabled. This feature is not an isolation boundary against commands run with unrestricted access to the host.
++
++## Build this fork
++
++The npm `@openai/codex` package is upstream and does **not** contain this change.
++
++```bash
++git clone https://github.com/thehumanworks/codex.git codex-env-auth
++cd codex-env-auth/codex-rs
++cargo build --release --locked -p codex-cli --bin codex
++./target/release/codex login status
++```
++
++The repository pins Rust 1.95.0. The standard upstream native build prerequisites still apply. To install the fork into Cargo's binary directory after cloning, use `cargo install --path cli --locked --force` from `codex-rs`.
++
++## Verification
++
++The tests use synthetic JWTs and a loopback mock service, never real credentials. They run the actual compiled CLI, including a real Unix PTY for the interactive UI and JSON-RPC for its app-server. They check outbound bearer/account headers, successful headless and interactive responses, absence of a credential file or token in the temporary Codex home, precedence, restrictions, invalid/expired inputs, and logout/401 behavior.
++
++```bash
++# From the repository root, with the pinned Rust toolchain and cargo-nextest installed:
++just fmt-check
++just test --locked -p codex-login -p codex-protocol -p codex-shell-command
++just test --locked -p codex-cli --test login
++cargo build --manifest-path codex-rs/Cargo.toml --locked -p codex-cli --bin codex
++python3 scripts/test_chatgpt_env_auth.py --codex-bin codex-rs/target/debug/codex
++```
++
++The Python integration runner uses only the standard library. The PTY check runs on Linux/macOS and is explicitly skipped on Windows. See `fork/verification/REPORT.md` for the recorded run results and limitations.
+diff --git a/README.md b/README.md
+index 06b02fced..aef200b03 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,6 @@
++> [!NOTE]
++> **thehumanworks fork:** supports `CHATGPT_AUTH_TOKEN` in interactive Codex and `codex exec`, without `auth.json`. `CHATGPT_ACCOUNT_ID` is derived from the token when available. See [fork usage and verification](FORK.md).
++
+ <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
+ <p align="center">
+   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
+diff --git a/codex-rs/cli/src/login.rs b/codex-rs/cli/src/login.rs
+index 22e607c6e..f60e0d031 100644
+--- a/codex-rs/cli/src/login.rs
++++ b/codex-rs/cli/src/login.rs
+@@ -168,6 +168,9 @@ pub async fn login_with_chatgpt(
+ }
+ 
+ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
++    if codex_login::is_chatgpt_auth_token_configured() {
++        run_login_status(cli_config_overrides).await;
++    }
+     let config = load_config_or_exit(cli_config_overrides).await;
+     let _login_log_guard = init_login_file_logging(&config);
+     tracing::info!("starting browser login flow");
+@@ -473,7 +476,11 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
+                 }
+             },
+             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
+-                eprintln!("Logged in using ChatGPT");
++                if auth.is_environment_chatgpt_auth() {
++                    eprintln!("Logged in using ChatGPT (CHATGPT_AUTH_TOKEN)");
++                } else {
++                    eprintln!("Logged in using ChatGPT");
++                }
+                 std::process::exit(0);
+             }
+             AuthMode::Headers => {
+@@ -508,6 +515,12 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
+ }
+ 
+ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
++    if codex_login::is_chatgpt_auth_token_configured() {
++        eprintln!(
++            "CHATGPT_AUTH_TOKEN is set; unset it in the launching environment to stop using it. Cached credentials were left unchanged."
++        );
++        std::process::exit(1);
++    }
+     let config = load_config_or_exit(cli_config_overrides).await;
+     let auth_route_config = config.auth_route_config();
+ 
+diff --git a/codex-rs/login/src/auth/chatgpt_env.rs b/codex-rs/login/src/auth/chatgpt_env.rs
+new file mode 100644
+index 000000000..1a533b851
+--- /dev/null
++++ b/codex-rs/login/src/auth/chatgpt_env.rs
+@@ -0,0 +1,82 @@
++//! Process-local ChatGPT credentials. No credential store is read or written here.
++
++use std::env;
++use std::io;
++
++use chrono::Utc;
++
++use super::manager::CodexAuth;
++use crate::token_data::parse_chatgpt_jwt_claims;
++use crate::token_data::parse_jwt_expiration;
++
++pub use codex_protocol::shell_environment::CHATGPT_AUTH_TOKEN_ENV_VAR;
++pub const CHATGPT_ACCOUNT_ID_ENV_VAR: &str = "CHATGPT_ACCOUNT_ID";
++
++/// Whether this process was launched with an environment-managed ChatGPT token.
++/// Invalid Unicode is considered configured so callers can report it, not fall back.
++pub fn is_chatgpt_auth_token_configured() -> bool {
++    env::var_os(CHATGPT_AUTH_TOKEN_ENV_VAR)
++        .is_some_and(|value| value.to_str().is_none_or(|value| !value.trim().is_empty()))
++}
++
++pub(super) fn auth_from_env() -> io::Result<Option<CodexAuth>> {
++    let Some(token) = read_env(CHATGPT_AUTH_TOKEN_ENV_VAR)? else {
++        return Ok(None);
++    };
++    let account_id = read_env(CHATGPT_ACCOUNT_ID_ENV_VAR)?;
++    auth_from_values(&token, account_id.as_deref()).map(Some)
++}
++
++fn read_env(name: &str) -> io::Result<Option<String>> {
++    match env::var(name) {
++        Ok(value) => Ok(Some(value.trim().to_owned()).filter(|value| !value.is_empty())),
++        Err(env::VarError::NotPresent) => Ok(None),
++        Err(env::VarError::NotUnicode(_)) => {
++            Err(invalid(format!("{name} must contain valid Unicode")))
++        }
++    }
++}
++
++fn auth_from_values(token: &str, account_id: Option<&str>) -> io::Result<CodexAuth> {
++    let token = token.trim();
++    if token.split('.').count() != 3
++        || token
++            .bytes()
++            .any(|byte| byte.is_ascii_whitespace() || !byte.is_ascii_graphic())
++    {
++        return Err(invalid(
++            "CHATGPT_AUTH_TOKEN must be a ChatGPT access-token JWT (without a Bearer prefix)",
++        ));
++    }
++    // Decode metadata only. The service remains responsible for verifying the token.
++    // Do not include parser errors: malformed claim values may contain credentials.
++    let claims = parse_chatgpt_jwt_claims(token)
++        .map_err(|_| invalid("CHATGPT_AUTH_TOKEN is not a valid ChatGPT access-token JWT"))?;
++    let expires_at = parse_jwt_expiration(token)
++        .map_err(|_| invalid("CHATGPT_AUTH_TOKEN contains an invalid expiration claim"))?;
++    if expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
++        return Err(invalid(
++            "CHATGPT_AUTH_TOKEN has expired; supply a fresh access token and restart Codex",
++        ));
++    }
++    let account_id = account_id
++        .map(str::trim)
++        .filter(|value| !value.is_empty())
++        .or_else(|| claims.chatgpt_account_id.as_deref().map(str::trim).filter(|value| !value.is_empty()))
++        .ok_or_else(|| invalid("CHATGPT_AUTH_TOKEN does not contain a ChatGPT account ID; set CHATGPT_ACCOUNT_ID for the intended workspace"))?;
++    if !account_id.bytes().all(|byte| byte.is_ascii_graphic()) {
++        return Err(invalid(
++            "CHATGPT_ACCOUNT_ID must be a non-empty account ID without whitespace or control characters",
++        ));
++    }
++    CodexAuth::from_external_chatgpt_tokens(token, account_id, /*chatgpt_plan_type*/ None)
++        .map_err(|_| invalid("CHATGPT_AUTH_TOKEN could not be loaded"))
++}
++
++fn invalid(message: impl Into<String>) -> io::Error {
++    io::Error::new(io::ErrorKind::InvalidInput, message.into())
++}
++
++#[cfg(test)]
++#[path = "chatgpt_env_tests.rs"]
++mod tests;
+diff --git a/codex-rs/login/src/auth/chatgpt_env_tests.rs b/codex-rs/login/src/auth/chatgpt_env_tests.rs
+new file mode 100644
+index 000000000..f31f1e947
+--- /dev/null
++++ b/codex-rs/login/src/auth/chatgpt_env_tests.rs
+@@ -0,0 +1,123 @@
++use super::*;
++use base64::Engine;
++use codex_protocol::auth::AuthMode;
++use pretty_assertions::assert_eq;
++use serde_json::Value;
++use serde_json::json;
++
++fn jwt(claims: Value) -> String {
++    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
++    format!("eyJhbGciOiJIUzI1NiJ9.{payload}.test-signature")
++}
++
++#[test]
++fn derives_account_and_preserves_metadata_without_refresh_credentials() {
++    let token = jwt(json!({
++        "email": "test@example.com",
++        "https://api.openai.com/auth": {
++            "chatgpt_account_id": "account-from-token",
++            "chatgpt_plan_type": "pro",
++            "chatgpt_user_id": "test-user"
++        }
++    }));
++    let auth = auth_from_values(&token, None).unwrap();
++    let expected =
++        CodexAuth::from_external_chatgpt_tokens(&token, "account-from-token", None).unwrap();
++    assert_eq!(auth.api_auth_mode(), AuthMode::ChatgptAuthTokens);
++    assert_eq!(
++        auth.get_token_data().unwrap(),
++        expected.get_token_data().unwrap()
++    );
++    assert!(auth.get_token_data().unwrap().refresh_token.is_empty());
++}
++
++#[test]
++fn explicit_account_overrides_claim_and_surrounding_whitespace_is_trimmed() {
++    let token = jwt(json!({"https://api.openai.com/auth": {"chatgpt_account_id": "original"}}));
++    let padded = format!(" \n{token}\t ");
++    let auth = auth_from_values(&padded, Some(" selected-account \n")).unwrap();
++    let expected =
++        CodexAuth::from_external_chatgpt_tokens(&token, "selected-account", None).unwrap();
++    assert_eq!(
++        auth.get_token_data().unwrap(),
++        expected.get_token_data().unwrap()
++    );
++}
++
++#[test]
++fn account_override_is_only_required_when_claim_is_missing() {
++    for claims in [
++        json!({}),
++        json!({"https://api.openai.com/auth": {"chatgpt_account_id": " "}}),
++    ] {
++        let token = jwt(claims);
++        let error = auth_from_values(&token, None).unwrap_err();
++        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
++        assert!(error.to_string().contains("set CHATGPT_ACCOUNT_ID"));
++        let auth = auth_from_values(&token, Some("explicit-account")).unwrap();
++        assert_eq!(auth.get_account_id(), Some("explicit-account".to_string()));
++    }
++}
++
++#[test]
++fn empty_override_uses_claim() {
++    let token = jwt(json!({"https://api.openai.com/auth": {"chatgpt_account_id": "from-claim"}}));
++    for account_id in [None, Some(""), Some(" \t")] {
++        assert_eq!(
++            auth_from_values(&token, account_id)
++                .unwrap()
++                .get_account_id(),
++            Some("from-claim".to_string())
++        );
++    }
++}
++
++#[test]
++fn rejects_invalid_jwts_without_echoing_credentials() {
++    let private_claim = jwt(
++        json!({"https://api.openai.com/auth": {"chatgpt_account_id": {"private-secret": "do-not-echo"}}}),
++    );
++    for token in [
++        "opaque-private-secret",
++        "a.b.c.d",
++        "a.!!!.c",
++        "Bearer a.b.c",
++        "a.e30.c\r\ninjected",
++        &private_claim,
++    ] {
++        let error = auth_from_values(token, Some("account")).unwrap_err();
++        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
++        assert!(error.to_string().contains("CHATGPT_AUTH_TOKEN"));
++        assert!(!error.to_string().contains(token));
++        assert!(!error.to_string().contains("private-secret"));
++        assert!(!error.to_string().contains("do-not-echo"));
++    }
++}
++
++#[test]
++fn rejects_expired_and_invalid_expiration_claims() {
++    for exp in [json!(0), json!(-1), json!("private-expiration")] {
++        let token = jwt(json!({"exp": exp}));
++        let error = auth_from_values(&token, Some("account")).unwrap_err();
++        assert!(error.to_string().contains("expir"));
++        assert!(!error.to_string().contains("private-expiration"));
++    }
++    let token = jwt(json!({"exp": 4102444800_i64}));
++    assert!(auth_from_values(&token, Some("account")).is_ok());
++}
++
++#[test]
++fn rejects_invalid_account_headers() {
++    let token = jwt(json!({}));
++    for account_id in [
++        "account\r\nHeader:value",
++        "account id",
++        "account\tname",
++        "accöunt",
++    ] {
++        let error = auth_from_values(&token, Some(account_id)).unwrap_err();
++        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
++        assert!(error.to_string().contains("CHATGPT_ACCOUNT_ID"));
++        assert!(!error.to_string().contains(account_id));
++    }
++}
+diff --git a/codex-rs/login/src/auth/manager.rs b/codex-rs/login/src/auth/manager.rs
+index de1f26ca0..27e9bac90 100644
+--- a/codex-rs/login/src/auth/manager.rs
++++ b/codex-rs/login/src/auth/manager.rs
+@@ -180,6 +180,7 @@ pub struct ChatgptAuth {
+ #[derive(Debug, Clone)]
+ pub struct ChatgptAuthTokens {
+     state: ChatgptAuthState,
++    environment_managed: bool,
+ }
+ 
+ #[derive(Debug, Clone)]
+@@ -395,7 +396,10 @@ impl CodexAuth {
+                 );
+                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
+             }
+-            AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state })),
++            AuthMode::ChatgptAuthTokens => Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens {
++                state,
++                environment_managed: false,
++            })),
+             AuthMode::ApiKey => unreachable!("api key mode is handled above"),
+             AuthMode::Headers => {
+                 unreachable!("externally provided auth is never loaded from auth storage")
+@@ -528,6 +532,11 @@ impl CodexAuth {
+         matches!(self, Self::ChatgptAuthTokens(_))
+     }
+ 
++    /// Environment-managed tokens must be replaced by the launching process.
++    pub fn is_environment_chatgpt_auth(&self) -> bool {
++        matches!(self, Self::ChatgptAuthTokens(auth) if auth.environment_managed)
++    }
++
+     fn supports_unauthorized_recovery(&self) -> bool {
+         matches!(
+             self,
+@@ -832,7 +841,10 @@ impl CodexAuth {
+             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
+             client: create_client(),
+         };
+-        Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
++        Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens {
++            state,
++            environment_managed: false,
++        }))
+     }
+ 
+     pub fn from_api_key(api_key: &str) -> Self {
+@@ -1320,6 +1332,14 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
+         return Ok(());
+     };
+ 
++    // Reject restricted environment credentials without deleting unrelated cached logins.
++    if auth.is_environment_chatgpt_auth() {
++        let allowed = config.allowed_login_methods();
++        let workspaces = config.effective_chatgpt_workspaces();
++        return validate_auth_restrictions(Some(&allowed), workspaces.as_deref(), &auth)
++            .map_err(|message| std::io::Error::new(std::io::ErrorKind::PermissionDenied, message));
++    }
++
+     if let Some(required_method) = config.forced_login_method {
+         let method_violation = match (required_method, auth.auth_mode()) {
+             (ForcedLoginMethod::Api, AuthMode::ApiKey)
+@@ -1506,6 +1526,20 @@ async fn load_auth(
+         return Ok(Some(auth));
+     }
+ 
++    // Environment credentials override persisted credentials without touching a store.
++    if auth_mode_is_allowed(allowed_login_methods, AuthMode::ChatgptAuthTokens)
++        && let Some(mut auth) = super::chatgpt_env::auth_from_env()?
++    {
++        validate_auth_restrictions(allowed_login_methods, forced_chatgpt_workspace_id, &auth)
++            .map_err(|message| {
++                std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
++            })?;
++        if let CodexAuth::ChatgptAuthTokens(tokens) = &mut auth {
++            tokens.environment_managed = true;
++        }
++        return Ok(Some(auth));
++    }
++
+     if auth_mode_is_allowed(allowed_login_methods, AuthMode::AgentIdentity)
+         && let Some(access_token) = read_codex_access_token_from_env()
+     {
+@@ -2754,6 +2788,14 @@ impl AuthManager {
+         enable_codex_api_key_env: bool,
+     ) -> Result<Arc<Self>, AuthManagerInitializationError> {
+         let external_auth = WorkloadIdentityExternalAuth::from_process_config(&auth_config)?;
++        // The legacy constructor tolerates storage errors. An explicitly configured
++        // environment token must instead fail closed with an actionable error.
++        if external_auth.is_none() && super::chatgpt_env::is_chatgpt_auth_token_configured() {
++            auth_config
++                .load_auth(enable_codex_api_key_env)
++                .await
++                .map_err(RefreshTokenError::from)?;
++        }
+         let mut manager = Self::new_from_auth_config(auth_config, enable_codex_api_key_env).await;
+         manager.workload_identity_selected = external_auth.is_some();
+         let manager = Arc::new(manager);
+@@ -2865,6 +2907,12 @@ impl AuthManager {
+                 .await
+         } else {
+             match attempted_auth.as_ref() {
++                Some(auth) if auth.is_environment_chatgpt_auth() => {
++                    Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
++                        RefreshTokenFailedReason::Other,
++                        "CHATGPT_AUTH_TOKEN was rejected and cannot be refreshed by Codex; supply a fresh access token and restart Codex",
++                    )))
++                }
+                 Some(CodexAuth::Chatgpt(chatgpt_auth)) => {
+                     let token_data = chatgpt_auth.current_token_data().ok_or_else(|| {
+                         RefreshTokenError::Transient(std::io::Error::other(
+@@ -2932,6 +2980,16 @@ impl AuthManager {
+     }
+ 
+     fn ensure_logout_allowed(&self) -> std::io::Result<()> {
++        if self
++            .auth_cached()
++            .as_ref()
++            .is_some_and(CodexAuth::is_environment_chatgpt_auth)
++        {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::PermissionDenied,
++                "CHATGPT_AUTH_TOKEN is managed by the launching environment; unset it and restart Codex to log out. Cached credentials were left unchanged.",
++            ));
++        }
+         if self.workload_identity_selected {
+             return Err(std::io::Error::new(
+                 std::io::ErrorKind::PermissionDenied,
+diff --git a/codex-rs/login/src/auth/mod.rs b/codex-rs/login/src/auth/mod.rs
+index 226255f39..1edfd2a08 100644
+--- a/codex-rs/login/src/auth/mod.rs
++++ b/codex-rs/login/src/auth/mod.rs
+@@ -4,6 +4,7 @@ mod auth_headers;
+ mod bedrock_access_keys;
+ mod bedrock_api_key;
+ mod change_state;
++mod chatgpt_env;
+ pub mod default_client;
+ pub mod error;
+ mod personal_access_token;
+@@ -21,6 +22,9 @@ pub use bedrock_access_keys::login_with_bedrock_access_keys;
+ pub use bedrock_api_key::BedrockApiKeyAuth;
+ pub use bedrock_api_key::login_with_bedrock_api_key;
+ pub use change_state::AuthChangeState;
++pub use chatgpt_env::CHATGPT_ACCOUNT_ID_ENV_VAR;
++pub use chatgpt_env::CHATGPT_AUTH_TOKEN_ENV_VAR;
++pub use chatgpt_env::is_chatgpt_auth_token_configured;
+ pub use error::RefreshTokenFailedError;
+ pub use error::RefreshTokenFailedReason;
+ pub use manager::*;
+diff --git a/codex-rs/login/src/lib.rs b/codex-rs/login/src/lib.rs
+index e33e58712..05d95fcb0 100644
+--- a/codex-rs/login/src/lib.rs
++++ b/codex-rs/login/src/lib.rs
+@@ -35,6 +35,8 @@ pub use auth::AuthKeyringBackendKind;
+ pub use auth::AuthManager;
+ pub use auth::AuthManagerConfig;
+ pub use auth::AuthManagerInitializationError;
++pub use auth::CHATGPT_ACCOUNT_ID_ENV_VAR;
++pub use auth::CHATGPT_AUTH_TOKEN_ENV_VAR;
+ pub use auth::CLIENT_ID;
+ pub use auth::CLIENT_ID_OVERRIDE_ENV_VAR;
+ pub use auth::CODEX_ACCESS_TOKEN_ENV_VAR;
+@@ -51,6 +53,7 @@ pub use auth::RefreshTokenError;
+ pub use auth::UnauthorizedRecovery;
+ pub use auth::default_client;
+ pub use auth::enforce_login_restrictions;
++pub use auth::is_chatgpt_auth_token_configured;
+ pub use auth::is_workload_identity_selected;
+ pub use auth::load_auth_dot_json;
+ pub use auth::login_with_access_token;
+diff --git a/codex-rs/protocol/src/shell_environment.rs b/codex-rs/protocol/src/shell_environment.rs
+index e8bdaa40c..cc38cc901 100644
+--- a/codex-rs/protocol/src/shell_environment.rs
++++ b/codex-rs/protocol/src/shell_environment.rs
+@@ -3,6 +3,7 @@ use crate::config_types::ShellEnvironmentPolicy;
+ use crate::config_types::ShellEnvironmentPolicyInherit;
+ use std::collections::HashMap;
+ 
++pub const CHATGPT_AUTH_TOKEN_ENV_VAR: &str = "CHATGPT_AUTH_TOKEN";
+ pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
+ pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+ pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN";
+@@ -12,6 +13,7 @@ pub const OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR: &str = "OPENAI_WORKLOAD_IDEN
+ 
+ /// Environment variables that model-reachable child processes must not inherit.
+ pub const NON_INHERITABLE_ENV_VARS: &[&str] = &[
++    CHATGPT_AUTH_TOKEN_ENV_VAR,
+     CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR,
+     "NODE_REPL_AUTH_TOKEN",
+     OPENAI_FEDERATION_RULE_ID_ENV_VAR,
+diff --git a/codex-rs/protocol/src/shell_environment_tests.rs b/codex-rs/protocol/src/shell_environment_tests.rs
+index 2ec577e9b..41355f735 100644
+--- a/codex-rs/protocol/src/shell_environment_tests.rs
++++ b/codex-rs/protocol/src/shell_environment_tests.rs
+@@ -13,6 +13,10 @@ const TEST_NAME: &str =
+ fn non_inheritable_environment_is_removed_after_policy_overrides() {
+     let vars = [
+         ("SAFE".to_string(), "inherited".to_string()),
++        (
++            "chatgpt_auth_token".to_string(),
++            "inherited-chatgpt-token".to_string(),
++        ),
+         ("node_repl_auth_token".into(), "inherited-token".into()),
+         (
+             "openai_federation_rule_id".to_string(),
+@@ -32,6 +36,10 @@ fn non_inheritable_environment_is_removed_after_policy_overrides() {
+         ignore_default_excludes: true,
+         r#set: HashMap::from([
+             ("SAFE".to_string(), "override".to_string()),
++            (
++                "CHATGPT_AUTH_TOKEN".to_string(),
++                "configured-chatgpt-token".to_string(),
++            ),
+             ("Node_Repl_Auth_Token".into(), "configured-token".into()),
+             (
+                 "OpenAI_Identity_Token_File".to_string(),
+@@ -57,6 +65,7 @@ fn command_scrubber_removes_names_from_real_child_environment() {
+         let output = Command::new(std::env::current_exe().expect("locate current test binary"))
+             .args([TEST_NAME, "--exact", "--nocapture"])
+             .env(CHILD_MODE_ENV_VAR, "1")
++            .env("Chatgpt_Auth_Token", "inherited-chatgpt-token")
+             .env("Node_Repl_Auth_Token", "inherited-token")
+             .env("OpenAI_Federation_Rule_Id", "inherited-rule")
+             .env(
+@@ -81,6 +90,7 @@ fn command_scrubber_removes_names_from_real_child_environment() {
+     let mut command = environment_command();
+     command
+         .env("NODE_REPL_AUTH_TOKEN", "configured-token")
++        .env(CHATGPT_AUTH_TOKEN_ENV_VAR, "configured-chatgpt-token")
+         .env("openai_identity_token_file", "/run/identity-token")
+         .env(
+             CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR,
+diff --git a/codex-rs/shell-command/src/shell_snapshot_render.rs b/codex-rs/shell-command/src/shell_snapshot_render.rs
+index ead034d38..5cfedb34e 100644
+--- a/codex-rs/shell-command/src/shell_snapshot_render.rs
++++ b/codex-rs/shell-command/src/shell_snapshot_render.rs
+@@ -9,11 +9,15 @@ impl CapturedSnapshot<'_> {
+         format!("{}{}", self.state, self.aliases)
+     }
+ 
+-    /// Render a complete replay script without applying credential or environment policy.
++    /// Render a replay script, excluding host-only authentication exports.
++    /// General shell-environment policy is applied separately by credential-aware callers.
+     pub fn render_script(&self) -> String {
+         let mut script = self.render_state();
+         script.push_str("# exports (native declarations)\n");
+         for export in &self.exports {
++            if codex_protocol::shell_environment::is_non_inheritable_env_var(export.key) {
++                continue;
++            }
+             script.push_str(&export.source);
+         }
+         script
+diff --git a/codex-rs/shell-command/src/shell_snapshot_tests.rs b/codex-rs/shell-command/src/shell_snapshot_tests.rs
+index c8b877d40..976319798 100644
+--- a/codex-rs/shell-command/src/shell_snapshot_tests.rs
++++ b/codex-rs/shell-command/src/shell_snapshot_tests.rs
+@@ -2233,3 +2233,18 @@ fn captured_script(shell_type: ShellType, source: &str) -> Result<String> {
+         CapturedSnapshot::parse(shell_type, source.as_bytes()).context("invalid native capture")?;
+     Ok(captured.render_script())
+ }
++
++#[test]
++fn snapshot_render_omits_host_only_authentication_exports() -> Result<()> {
++    for name in ["CHATGPT_AUTH_TOKEN", "Chatgpt_Auth_Token"] {
++        let source = format!(
++            "# Snapshot file\n\0\0{name}\0export {name}='private-chatgpt-token'\n\0SAFE\0export SAFE='keep'\n\0\0"
++        );
++        let rendered = captured_script(ShellType::Bash, &source)?;
++        assert_eq!(
++            rendered,
++            "# Snapshot file\n# exports (native declarations)\nexport SAFE='keep'\n"
++        );
++    }
++    Ok(())
++}
+diff --git a/fork/verification/REPORT.md b/fork/verification/REPORT.md
+new file mode 100644
+index 000000000..9383d59d9
+--- /dev/null
++++ b/fork/verification/REPORT.md
+@@ -0,0 +1,55 @@
++# ChatGPT environment authentication: verification record
++
++Completed: **2026-09-11T14:42:44+00:00**. Implementation commit: `fab2e63e55d1a833dd3560b9435545daf002fe74`. Upstream baseline: `7a6f469dcff1337786aae046df2d899accea59ab`.
++
++The implementation was built and exercised in a Linux x86-64 Modal sandbox using Rust 1.95.0. The source and complete raw verification logs are retained in the accompanying persistent Modal workspace snapshot. Recorded runner output is in [results.txt](results.txt).
++
++## Results
++
++| Check | Result |
++| --- | --- |
++| `cargo build --locked -p codex-cli --bin codex` | Passed; actual CLI binary built |
++| `just test --locked -p codex-login -p codex-protocol -p codex-shell-command` | **755 passed**, zero runner-reported skips |
++| `just test --locked -p codex-cli --test login` | **7 passed**, zero runner-reported skips |
++| `python3 scripts/test_chatgpt_env_auth.py --codex-bin codex-rs/target/debug/codex` | **17 passed**, including a real interactive PTY and app-server JSON-RPC |
++| `cargo clippy --locked --tests -p codex-login -p codex-cli -p codex-protocol -p codex-shell-command` | Passed; no warnings in the final check |
++| `just fmt-check` | Passed |
++| `uv run --frozen --project scripts ruff check scripts/test_chatgpt_env_auth.py` | Passed |
++
++The optional `just fix` pass proposed an unrelated `clippy::question_mark` cleanup in `codex-rs/shell-command/src/bash.rs`. That automatic edit was inspected and reverted to keep this fork's change scoped; the final non-mutating Clippy check passed. Final Rust sources exactly match the tested implementation commit.
++
++## Acceptance evidence
++
++| Invariant | Evidence |
++| --- | --- |
++| Interactive and headless modes accept the environment token without `auth.json` | Real CLI subprocesses complete loopback SSE requests; PTY test submits a prompt through the interactive app |
++| Account ID is derived unless explicitly needed or overridden | Parser tests and HTTP assertions cover embedded, absent, blank and explicit account IDs |
++| Correct HTTP authentication is sent | Mock service inspects `Authorization: Bearer ...` and `ChatGPT-Account-Id` on actual inference requests |
++| No credential store dependency or token persistence | File, ephemeral, keyring and auto modes tested; temporary Codex homes scanned for the synthetic token, including after TUI exit |
++| Cached credentials and existing login behavior are preserved | Corrupt cache override, ordinary cached API login, `CODEX_API_KEY` precedence, CLI/app-server logout and existing upstream login regressions |
++| Invalid credentials and restrictions fail safely | Malformed/expired/non-Unicode inputs, unsafe header values and forced workspace/login-policy tests; credential values absent from new diagnostic errors |
++| Environment-managed credentials are not refreshed or revoked as cached OAuth credentials | Mock 401 test verifies an actionable replacement error and no OAuth refresh request; logout leaves existing credentials unchanged |
++| Token is not inherited by model-reachable children or replayed through snapshots | Shared environment-policy, real child-process scrubber and snapshot-rendering regression tests |
++| Changes stay downstream | Implementation and verification commits pushed only to `thehumanworks/codex`; no upstream PR created |
++
++The persistence scan initially found that the upstream non-brokered snapshot renderer serialized the token's exported value. The shipped fix adds the token to the shared non-inheritable set and excludes host-only exports from that renderer. The PTY persistence scan subsequently passed.
++
++## Test boundaries
++
++The backend is a loopback mock and the JWTs are deliberately synthetic. These tests prove the real CLI's credential loading, request headers, interactive/headless behavior, and persistence properties; they do not demonstrate live acceptance by ChatGPT. A live credential lookup was attempted without displaying its value, but the configured Doppler source could not authenticate. No live ChatGPT request was claimed or used as evidence.
++
++The executable tested is a development build. macOS/Windows builds and the complete upstream workspace test suite were not run. The changed authentication parser is platform-independent Rust; the Python PTY and byte-environment tests are explicitly Unix-only. Runtime-specific branches in existing upstream tests retain their original platform checks.
++
++## Raw-log integrity
++
++These are SHA-256 digests of the full successful-run logs retained with the Modal snapshot, not only the summaries above.
++
++| Log | SHA-256 |
++| --- | --- |
++| `auth-and-shell-tests.log` | `a0389454e1fe7ffb333b10c354599b6366ffe04ab0da92009f6e09226b3155f4` |
++| `cli-login-tests.log` | `e8f502ceda807bc15bb8f9934668bfaa2fd54fb791716b012f7094ffb0bbb69d` |
++| `black-box-tests.log` | `0bb4eca8649d7e40cde77fc026ae75d98a71df02d17f2cd8c93573604aab2efb` |
++| `build-final.log` | `9ea2d767fdfd67eea28cd73f87425dc82c44eae893757feb83839d615c0618cd` |
++| `clippy-final.log` | `f13901892809f898ce9306d73b5076f805c648a9bbb715730f0a3a9fc7f7d279` |
++| `fmt-check.log` | `02e690d37e535e3e7e48497212051a4bb86f8d6bafeb7cf5412107d3948ca909` |
++| `python-lint.log` | `82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18` |
+diff --git a/fork/verification/results.txt b/fork/verification/results.txt
+new file mode 100644
+index 000000000..5ac28c01b
+--- /dev/null
++++ b/fork/verification/results.txt
+@@ -0,0 +1,34 @@
++Verification completed: 2026-09-11T14:42:44+00:00
++Implementation: fab2e63e55d1a833dd3560b9435545daf002fe74
++Upstream base: 7a6f469dcff1337786aae046df2d899accea59ab
++
++Summary [   8.404s] 755 tests run: 755 passed, 0 skipped
++Summary [   2.917s] 7 tests run: 7 passed, 0 skipped
++
++test_app_server_logout_preserves_cached_credentials (__main__.EnvironmentAuthTests.test_app_server_logout_preserves_cached_credentials) ... ok
++test_blank_token_and_account_only_do_not_login (__main__.EnvironmentAuthTests.test_blank_token_and_account_only_do_not_login) ... ok
++test_cached_api_key_still_works_without_environment_token (__main__.EnvironmentAuthTests.test_cached_api_key_still_works_without_environment_token) ... ok
++test_environment_bypasses_credential_stores (__main__.EnvironmentAuthTests.test_environment_bypasses_credential_stores) ... ok
++test_environment_overrides_corrupt_cache_without_reading_or_writing_it (__main__.EnvironmentAuthTests.test_environment_overrides_corrupt_cache_without_reading_or_writing_it) ... ok
++test_exec_json_sends_explicit_account_without_cache (__main__.EnvironmentAuthTests.test_exec_json_sends_explicit_account_without_cache) ... ok
++test_exec_preserves_codex_api_key_precedence (__main__.EnvironmentAuthTests.test_exec_preserves_codex_api_key_precedence) ... ok
++test_exec_sends_derived_auth_headers_without_cache (__main__.EnvironmentAuthTests.test_exec_sends_derived_auth_headers_without_cache) ... ok
++test_forced_api_policy_does_not_use_chatgpt_token (__main__.EnvironmentAuthTests.test_forced_api_policy_does_not_use_chatgpt_token) ... ok
++test_forced_workspace_rejects_without_deleting_cache (__main__.EnvironmentAuthTests.test_forced_workspace_rejects_without_deleting_cache) ... ok
++test_interactive_tui_sends_request_without_login_onboarding (__main__.EnvironmentAuthTests.test_interactive_tui_sends_request_without_login_onboarding) ... ok
++test_invalid_tokens_fail_closed_without_secret_in_errors (__main__.EnvironmentAuthTests.test_invalid_tokens_fail_closed_without_secret_in_errors) ... ok
++test_invalid_unicode_credentials_report_safe_errors (__main__.EnvironmentAuthTests.test_invalid_unicode_credentials_report_safe_errors) ... ok
++test_login_and_status_use_environment_without_writing_cache (__main__.EnvironmentAuthTests.test_login_and_status_use_environment_without_writing_cache) ... ok
++test_logout_explains_environment_without_deleting_cache (__main__.EnvironmentAuthTests.test_logout_explains_environment_without_deleting_cache) ... ok
++test_missing_account_requires_only_account_override (__main__.EnvironmentAuthTests.test_missing_account_requires_only_account_override) ... ok
++test_rejected_token_does_not_attempt_oauth_or_write_cache (__main__.EnvironmentAuthTests.test_rejected_token_does_not_attempt_oauth_or_write_cache) ... ok
++
++----------------------------------------------------------------------
++Ran 17 tests in 61.202s
++
++OK
++
++Rust formatting: just fmt-check, exit 0.
++Python lint: All checks passed!
++Rust Clippy: completed successfully; no warnings in the final check.
++Live ChatGPT API: not run (configured Doppler credential source was unavailable).
+diff --git a/scripts/test_chatgpt_env_auth.py b/scripts/test_chatgpt_env_auth.py
+new file mode 100644
+index 000000000..1e771920a
+--- /dev/null
++++ b/scripts/test_chatgpt_env_auth.py
+@@ -0,0 +1,449 @@
++#!/usr/bin/env python3
++"""Hermetic black-box tests for this fork's ChatGPT environment authentication.
++
++Run: python3 scripts/test_chatgpt_env_auth.py --codex-bin codex-rs/target/debug/codex
++The service is a loopback mock; no real tokens, browser login, or paid API calls.
++The PTY checks run on Linux/macOS; other checks also run on Windows.
++"""
++
++import argparse
++import base64
++import http.server
++import json
++import os
++import queue
++from pathlib import Path
++import select
++import subprocess
++import tempfile
++import threading
++import time
++import unittest
++
++BINARY = None
++REPLY = "environment-auth-verified"
++
++
++def jwt(claims):
++    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
++    return f"eyJhbGciOiJIUzI1NiJ9.{payload}.synthetic-signature"
++
++
++TOKEN = jwt(
++    {
++        "exp": 4102444800,
++        "email": "fixture@example.com",
++        "https://api.openai.com/auth": {
++            "chatgpt_account_id": "account-from-token",
++            "chatgpt_plan_type": "pro",
++        },
++    }
++)
++
++
++class Backend(http.server.BaseHTTPRequestHandler):
++    def log_message(self, *_args):
++        pass
++
++    def respond(self, status, body, content_type="application/json"):
++        data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
++        self.send_response(status)
++        self.send_header("Content-Type", content_type)
++        self.send_header("Content-Length", str(len(data)))
++        self.end_headers()
++        self.wfile.write(data)
++
++    def do_GET(self):
++        self.server.requests.append(("GET", self.path, dict(self.headers)))
++        if self.path.split("?")[0].endswith("/models"):
++            self.respond(200, {"models": []})
++        else:
++            self.respond(404, {"error": "not found"})
++
++    def do_POST(self):
++        self.rfile.read(int(self.headers.get("Content-Length", 0)))
++        self.server.requests.append(("POST", self.path, dict(self.headers)))
++        if self.path.split("?")[0].endswith("/responses"):
++            if self.server.reject:
++                self.respond(
++                    401,
++                    {"error": {"message": "token rejected", "type": "invalid_token"}},
++                )
++                return
++            events = [
++                {"type": "response.created", "response": {"id": "resp-env"}},
++                {
++                    "type": "response.output_item.done",
++                    "item": {
++                        "type": "message",
++                        "id": "msg-env",
++                        "role": "assistant",
++                        "content": [{"type": "output_text", "text": REPLY}],
++                    },
++                },
++                {
++                    "type": "response.completed",
++                    "response": {
++                        "id": "resp-env",
++                        "usage": {
++                            "input_tokens": 1,
++                            "output_tokens": 1,
++                            "total_tokens": 2,
++                        },
++                    },
++                },
++            ]
++            self.respond(
++                200,
++                "".join(f"data: {json.dumps(event)}\n\n" for event in events),
++                "text/event-stream",
++            )
++        else:
++            self.respond(404, {"error": "not found"})
++
++
++class EnvironmentAuthTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory(prefix="codex-env-auth-")
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name)
++        self.home = self.root / "codex-home"
++        self.home.mkdir()
++        self.cwd = self.root / "project"
++        self.cwd.mkdir()
++        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Backend)
++        self.server.requests = []
++        self.server.reject = False
++        self.addCleanup(self.server.server_close)
++        self.addCleanup(self.server.shutdown)
++        threading.Thread(target=self.server.serve_forever, daemon=True).start()
++        self.base = f"http://127.0.0.1:{self.server.server_port}"
++        self.env = {
++            key: value
++            for key, value in os.environ.items()
++            if key
++            in {
++                "PATH",
++                "SYSTEMROOT",
++                "WINDIR",
++                "COMSPEC",
++                "PATHEXT",
++                "TMP",
++                "TEMP",
++            }
++        }
++        self.env.update(
++            {
++                "HOME": str(self.root),
++                "USERPROFILE": str(self.root),
++                "CODEX_HOME": str(self.home),
++                "CODEX_SQLITE_HOME": str(self.home),
++                "TERM": "xterm-256color",
++                "LANG": "C.UTF-8",
++                "CHATGPT_AUTH_TOKEN": TOKEN,
++                "CODEX_REFRESH_TOKEN_URL_OVERRIDE": f"{self.base}/oauth/token",
++            }
++        )
++        self.configure()
++
++    def configure(self, extra="", store="file"):
++        (self.home / "config.toml").write_text(
++            f'cli_auth_credentials_store = "{store}"\n'
++            f'chatgpt_base_url = "{self.base}/backend-api"\n'
++            f'openai_base_url = "{self.base}/v1"\n'
++            'model = "gpt-5.6-sol"\ncheck_for_update_on_startup = false\n'
++            'approval_policy = "never"\n'
++            f"{extra}\n"
++            f'[projects.{json.dumps(str(self.cwd))}]\ntrust_level = "trusted"\n',
++            encoding="utf-8",
++        )
++
++    def run_cli(self, *args, success=True):
++        result = subprocess.run(
++            [str(BINARY), *args],
++            cwd=self.cwd,
++            env=self.env,
++            input="",
++            capture_output=True,
++            text=True,
++            timeout=45,
++        )
++        output = result.stdout + result.stderr
++        self.assertNotIn(TOKEN, output, "credential leaked in CLI output")
++        self.assertEqual(result.returncode == 0, success, output)
++        return output
++
++    def assert_no_auth_file(self):
++        self.assertFalse((self.home / "auth.json").exists())
++        for path in self.home.rglob("*"):
++            if path.is_file():
++                self.assertFalse(
++                    TOKEN.encode() in path.read_bytes(),
++                    f"credential persisted in {path.name}",
++                )
++
++    def assert_request_auth(self, account="account-from-token", token=TOKEN):
++        requests = [
++            headers
++            for method, path, headers in self.server.requests
++            if method == "POST" and path.endswith("/responses")
++        ]
++        self.assertTrue(requests, self.server.requests)
++        for headers in requests:
++            lowered = {key.lower(): value for key, value in headers.items()}
++            self.assertEqual(lowered.get("authorization"), f"Bearer {token}")
++            self.assertEqual(lowered.get("chatgpt-account-id"), account)
++        self.assert_no_auth_file()
++
++    def test_login_and_status_use_environment_without_writing_cache(self):
++        for args in [("login",), ("login", "status")]:
++            self.assertIn("ChatGPT (CHATGPT_AUTH_TOKEN)", self.run_cli(*args))
++            self.assert_no_auth_file()
++
++    def test_blank_token_and_account_only_do_not_login(self):
++        self.env["CHATGPT_ACCOUNT_ID"] = "unused"
++        for token in ["", " \t\n"]:
++            self.env["CHATGPT_AUTH_TOKEN"] = token
++            self.assertIn(
++                "Not logged in", self.run_cli("login", "status", success=False)
++            )
++        del self.env["CHATGPT_AUTH_TOKEN"]
++        self.assertIn("Not logged in", self.run_cli("login", "status", success=False))
++
++    def test_cached_api_key_still_works_without_environment_token(self):
++        del self.env["CHATGPT_AUTH_TOKEN"]
++        (self.home / "auth.json").write_text('{"OPENAI_API_KEY":"sk-fixture"}')
++        self.assertIn("Logged in using an API key", self.run_cli("login", "status"))
++
++    def test_environment_overrides_corrupt_cache_without_reading_or_writing_it(self):
++        auth = self.home / "auth.json"
++        original = "{this cached file is deliberately invalid"
++        auth.write_text(original)
++        self.assertIn("CHATGPT_AUTH_TOKEN", self.run_cli("login", "status"))
++        self.assertEqual(auth.read_text(), original)
++
++    def test_environment_bypasses_credential_stores(self):
++        for store in ["file", "ephemeral", "keyring", "auto"]:
++            with self.subTest(store=store):
++                self.configure(store=store)
++                self.assertIn("CHATGPT_AUTH_TOKEN", self.run_cli("login", "status"))
++                self.assert_no_auth_file()
++
++    def test_missing_account_requires_only_account_override(self):
++        self.env["CHATGPT_AUTH_TOKEN"] = jwt({"exp": 4102444800})
++        self.assertIn(
++            "set CHATGPT_ACCOUNT_ID", self.run_cli("login", "status", success=False)
++        )
++        self.env["CHATGPT_ACCOUNT_ID"] = "explicit-account"
++        self.assertIn("CHATGPT_AUTH_TOKEN", self.run_cli("login", "status"))
++        self.assert_no_auth_file()
++
++    def test_invalid_tokens_fail_closed_without_secret_in_errors(self):
++        for token, message in [
++            ("private-invalid-token", "JWT"),
++            (jwt({"exp": 0}), "expired"),
++        ]:
++            self.env["CHATGPT_AUTH_TOKEN"] = token
++            for args in [
++                ("login", "status"),
++                ("exec", "--skip-git-repo-check", "hello"),
++            ]:
++                output = self.run_cli(*args, success=False)
++                self.assertIn(message, output)
++                self.assertNotIn(token, output)
++        self.assert_no_auth_file()
++
++    @unittest.skipUnless(os.name == "posix", "requires Unix byte environments")
++    def test_invalid_unicode_credentials_report_safe_errors(self):
++        for name in ["CHATGPT_AUTH_TOKEN", "CHATGPT_ACCOUNT_ID"]:
++            with self.subTest(variable=name):
++                self.env["CHATGPT_AUTH_TOKEN"] = TOKEN
++                self.env[name] = "private-invalid-unicode-\udcff"
++                output = self.run_cli("login", "status", success=False)
++                self.assertIn(f"{name} must contain valid Unicode", output)
++                self.assertNotIn("private-invalid-unicode", output)
++                self.env.pop(name)
++
++    def test_forced_workspace_rejects_without_deleting_cache(self):
++        self.configure('forced_chatgpt_workspace_id = ["other-account"]')
++        auth = self.home / "auth.json"
++        original = '{"OPENAI_API_KEY":"sk-untouched"}'
++        auth.write_text(original)
++        output = self.run_cli("exec", "--skip-git-repo-check", "hello", success=False)
++        self.assertIn("restricted to workspace", output)
++        self.assertEqual(auth.read_text(), original)
++
++    def test_forced_api_policy_does_not_use_chatgpt_token(self):
++        self.configure('forced_login_method = "api"')
++        self.assertIn("Not logged in", self.run_cli("login", "status", success=False))
++        self.assert_no_auth_file()
++
++    def test_logout_explains_environment_without_deleting_cache(self):
++        auth = self.home / "auth.json"
++        original = '{"OPENAI_API_KEY":"sk-untouched"}'
++        auth.write_text(original)
++        self.assertIn("unset it", self.run_cli("logout", success=False))
++        self.assertEqual(auth.read_text(), original)
++
++    def test_exec_sends_derived_auth_headers_without_cache(self):
++        output = self.run_cli("exec", "--skip-git-repo-check", "hello")
++        self.assertIn(REPLY, output)
++        self.assert_request_auth()
++
++    def test_exec_json_sends_explicit_account_without_cache(self):
++        self.env["CHATGPT_ACCOUNT_ID"] = "selected-account"
++        output = self.run_cli("exec", "--json", "--skip-git-repo-check", "hello")
++        self.assertIn(REPLY, output)
++        self.assert_request_auth(account="selected-account")
++
++    def test_exec_preserves_codex_api_key_precedence(self):
++        self.env["CODEX_API_KEY"] = "sk-explicit-api"
++        self.assertIn(REPLY, self.run_cli("exec", "--skip-git-repo-check", "hello"))
++        self.assert_request_auth(account=None, token="sk-explicit-api")
++
++    def test_rejected_token_does_not_attempt_oauth_or_write_cache(self):
++        self.server.reject = True
++        output = self.run_cli("exec", "--skip-git-repo-check", "hello", success=False)
++        self.assertIn("supply a fresh access token", output)
++        self.assertFalse(
++            any("oauth/token" in path for _, path, _ in self.server.requests)
++        )
++        self.assertLessEqual(
++            sum(
++                method == "POST" and path.endswith("/responses")
++                for method, path, _ in self.server.requests
++            ),
++            3,
++        )
++        self.assert_no_auth_file()
++
++    def test_app_server_logout_preserves_cached_credentials(self):
++        auth = self.home / "auth.json"
++        original = '{"OPENAI_API_KEY":"sk-untouched"}'
++        auth.write_text(original)
++        process = subprocess.Popen(
++            [str(BINARY), "app-server"],
++            cwd=self.cwd,
++            env=self.env,
++            stdin=subprocess.PIPE,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.DEVNULL,
++            text=True,
++        )
++        incoming = queue.Queue()
++
++        def reader():
++            for line in process.stdout:
++                incoming.put(json.loads(line))
++
++        thread = threading.Thread(target=reader, daemon=True)
++        thread.start()
++
++        def rpc(request_id, method, params=None):
++            message = {"jsonrpc": "2.0", "id": request_id, "method": method}
++            if params is not None:
++                message["params"] = params
++            process.stdin.write(json.dumps(message) + "\n")
++            process.stdin.flush()
++            deadline = time.monotonic() + 30
++            while time.monotonic() < deadline:
++                message = incoming.get(timeout=max(0.01, deadline - time.monotonic()))
++                if message.get("id") == request_id:
++                    return message
++            self.fail("app-server did not respond")
++
++        try:
++            self.assertIn(
++                "result",
++                rpc(
++                    1,
++                    "initialize",
++                    {"clientInfo": {"name": "env-auth-test", "version": "1"}},
++                ),
++            )
++            account = rpc(2, "account/read", {"refreshToken": False})
++            self.assertEqual(account["result"]["account"]["type"], "chatgpt")
++            response = rpc(3, "account/logout")
++            self.assertIn("unset it", response["error"]["message"])
++            self.assertEqual(auth.read_text(), original)
++            self.assertFalse(
++                any("oauth/" in path for _, path, _ in self.server.requests)
++            )
++        finally:
++            process.stdin.close()
++            try:
++                process.wait(timeout=5)
++            except subprocess.TimeoutExpired:
++                process.terminate()
++                process.wait(timeout=5)
++            thread.join(timeout=5)
++            process.stdout.close()
++
++    @unittest.skipUnless(os.name == "posix", "requires a Unix PTY")
++    def test_interactive_tui_sends_request_without_login_onboarding(self):
++        import fcntl
++        import pty
++        import struct
++        import termios
++
++        master, slave = pty.openpty()
++        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
++        process = subprocess.Popen(
++            [str(BINARY), "--no-alt-screen", "hello"],
++            cwd=self.cwd,
++            env=self.env,
++            stdin=slave,
++            stdout=slave,
++            stderr=slave,
++            start_new_session=True,
++        )
++        os.close(slave)
++        output = b""
++        answered = set()
++        queries = {
++            b"\x1b[6n": b"\x1b[1;1R",
++            b"\x1b[?u": b"\x1b[?0u\x1b[?1;2c",
++            b"\x1b]10;?": b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
++            b"\x1b]11;?": b"\x1b]11;rgb:0000/0000/0000\x1b\\",
++        }
++        try:
++            deadline = time.monotonic() + 45
++            while time.monotonic() < deadline:
++                if select.select([master], [], [], 0.1)[0]:
++                    try:
++                        output += os.read(master, 65536)
++                    except OSError:
++                        break
++                    for query, response in queries.items():
++                        if query in output and query not in answered:
++                            os.write(master, response)
++                            answered.add(query)
++                    if REPLY.encode() in output:
++                        break
++                if process.poll() is not None:
++                    break
++            text = output.decode(errors="replace")
++            self.assertIn(REPLY, text)
++            self.assertNotIn(TOKEN, text)
++            self.assertNotIn("Sign in with ChatGPT", text)
++            self.assert_request_auth()
++        finally:
++            if process.poll() is None:
++                os.write(master, b"\x03")
++                time.sleep(0.15)
++                os.write(master, b"\x03")
++                try:
++                    process.wait(timeout=5)
++                except subprocess.TimeoutExpired:
++                    process.terminate()
++                    process.wait(timeout=5)
++            os.close(master)
++        self.assert_no_auth_file()
++
++
++if __name__ == "__main__":
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--codex-bin", required=True, type=Path)
++    args, remaining = parser.parse_known_args()
++    BINARY = args.codex_bin.resolve(strict=True)
++    unittest.main(argv=[__file__, *remaining], verbosity=2)

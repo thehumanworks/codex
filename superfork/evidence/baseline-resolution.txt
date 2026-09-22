@@ -1,0 +1,1 @@
+Preserved fork ChatGPT environment exports and upstream AuthRuntimeConfig export; no auth behavior intentionally removed. Runtime verification remains required. Upstream snapshot whitespace is unchanged and excluded from the resolution-only whitespace check.

@@ -1,0 +1,16 @@
+ FORK.md                                            |  80 ++++
+ README.md                                          |   3 +
+ codex-rs/cli/src/login.rs                          |  15 +-
+ codex-rs/login/src/auth/chatgpt_env.rs             |  82 ++++
+ codex-rs/login/src/auth/chatgpt_env_tests.rs       | 123 ++++++
+ codex-rs/login/src/auth/manager.rs                 |  62 ++-
+ codex-rs/login/src/auth/mod.rs                     |   4 +
+ codex-rs/login/src/lib.rs                          |   3 +
+ codex-rs/protocol/src/shell_environment.rs         |   2 +
+ codex-rs/protocol/src/shell_environment_tests.rs   |  10 +
+ .../shell-command/src/shell_snapshot_render.rs     |   6 +-
+ codex-rs/shell-command/src/shell_snapshot_tests.rs |  15 +
+ fork/verification/REPORT.md                        |  55 +++
+ fork/verification/results.txt                      |  34 ++
+ scripts/test_chatgpt_env_auth.py                   | 449 +++++++++++++++++++++
+ 15 files changed, 939 insertions(+), 4 deletions(-)

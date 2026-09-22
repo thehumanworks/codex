@@ -1,0 +1,2 @@
+e3bd229c57231a4cf985cfd3100ff982dcd8cb7d test(auth): verify both CLI modes and document the fork
+fab2e63e55d1a833dd3560b9435545daf002fe74 feat(auth): support stateless ChatGPT environment authentication
