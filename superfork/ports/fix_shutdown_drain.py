@@ -19,7 +19,9 @@ assert text.count(old) == 1, "unexpected processor shutdown boundary"
 text = text.replace(old, "        client_rx.close();\n        outgoing_message_sender")
 start = text.index("        let mut shutdown_result = match timeout(")
 end = text.index("        if shutdown_result.is_err()", start)
-text = text[:start] + '''        // Keep the RPC execution gate open until accepted responses have drained.
+text = (
+    text[:start]
+    + """        // Keep the RPC execution gate open until accepted responses have drained.
         // process_client_request enqueues work; returning from it is not completion.
         // Both response draining and processor teardown share this existing budget.
         let mut shutdown_result = match timeout(SHUTDOWN_TIMEOUT, async {
@@ -55,7 +57,9 @@ text = text[:start] + '''        // Keep the RPC execution gate open until accep
             Ok(result) => result,
             Err(_) => Err(IoError::new(ErrorKind::TimedOut, "request processor drain timed out")),
         };
-''' + text[end:]
+"""
+    + text[end:]
+)
 assert text.count(marker) == 1
 text += '\n#[cfg(test)]\n#[path = "in_process_shutdown_drain_tests.rs"]\nmod shutdown_drain_tests;\n'
 path.write_text(text)

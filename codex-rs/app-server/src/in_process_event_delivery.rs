@@ -32,7 +32,10 @@ pub(crate) enum DeliveryPhase {
 
 pub(crate) async fn route_queued_message(
     queued_message: QueuedOutgoingMessage,
-    pending_request_responses: &mut HashMap<RequestId, oneshot::Sender<PendingClientRequestResponse>>,
+    pending_request_responses: &mut HashMap<
+        RequestId,
+        oneshot::Sender<PendingClientRequestResponse>,
+    >,
     event_tx: &mpsc::Sender<InProcessServerEvent>,
     outgoing: &OutgoingMessageSender,
     event_delivery: InProcessEventDelivery,
@@ -60,11 +63,13 @@ pub(crate) async fn route_queued_message(
             if phase == DeliveryPhase::Draining {
                 // New approvals cannot be answered after client admission closes.
                 // Reject them explicitly rather than stalling processor cleanup.
-                outgoing.notify_client_error(
-                    IN_PROCESS_CONNECTION_ID,
-                    request.id().clone(),
-                    internal_error("in-process app-server runtime is shutting down"),
-                ).await;
+                outgoing
+                    .notify_client_error(
+                        IN_PROCESS_CONNECTION_ID,
+                        request.id().clone(),
+                        internal_error("in-process app-server runtime is shutting down"),
+                    )
+                    .await;
             } else if event_delivery == InProcessEventDelivery::Lossless {
                 if let Err(error) = event_tx
                     .send(InProcessServerEvent::ServerRequest(Box::new(request)))
@@ -73,15 +78,17 @@ pub(crate) async fn route_queued_message(
                     let InProcessServerEvent::ServerRequest(request) = error.0 else {
                         unreachable!("only a server request was sent");
                     };
-                    outgoing.notify_client_error(
-                        IN_PROCESS_CONNECTION_ID,
-                        request.id().clone(),
-                        internal_error("in-process server request consumer is closed"),
-                    ).await;
+                    outgoing
+                        .notify_client_error(
+                            IN_PROCESS_CONNECTION_ID,
+                            request.id().clone(),
+                            internal_error("in-process server request consumer is closed"),
+                        )
+                        .await;
                     return false;
                 }
-            } else if let Err(error) = event_tx
-                .try_send(InProcessServerEvent::ServerRequest(Box::new(request)))
+            } else if let Err(error) =
+                event_tx.try_send(InProcessServerEvent::ServerRequest(Box::new(request)))
             {
                 let (error, event, consumer_open) = match error {
                     mpsc::error::TrySendError::Full(event) => (
@@ -102,11 +109,9 @@ pub(crate) async fn route_queued_message(
                 let InProcessServerEvent::ServerRequest(request) = event else {
                     unreachable!("only a server request was sent");
                 };
-                outgoing.notify_client_error(
-                    IN_PROCESS_CONNECTION_ID,
-                    request.id().clone(),
-                    error,
-                ).await;
+                outgoing
+                    .notify_client_error(IN_PROCESS_CONNECTION_ID, request.id().clone(), error)
+                    .await;
                 if !consumer_open {
                     return false;
                 }
@@ -118,15 +123,17 @@ pub(crate) async fn route_queued_message(
                 || server_notification_requires_delivery(&notification)
             {
                 if event_tx
-                    .send(InProcessServerEvent::ServerNotification(Box::new(notification)))
+                    .send(InProcessServerEvent::ServerNotification(Box::new(
+                        notification,
+                    )))
                     .await
                     .is_err()
                 {
                     return false;
                 }
-            } else if let Err(error) = event_tx
-                .try_send(InProcessServerEvent::ServerNotification(Box::new(notification)))
-            {
+            } else if let Err(error) = event_tx.try_send(InProcessServerEvent::ServerNotification(
+                Box::new(notification),
+            )) {
                 match error {
                     mpsc::error::TrySendError::Full(_) => {
                         warn!("dropping in-process server notification (queue full)");
@@ -179,9 +186,19 @@ pub(crate) async fn drain_writer(
 ) -> IoResult<()> {
     while let Some(message) = writer_rx.recv().await {
         if !route_queued_message(
-            message, pending, event_tx, outgoing, event_delivery, DeliveryPhase::Draining,
-        ).await {
-            return Err(IoError::new(ErrorKind::BrokenPipe, "event consumer closed during drain"));
+            message,
+            pending,
+            event_tx,
+            outgoing,
+            event_delivery,
+            DeliveryPhase::Draining,
+        )
+        .await
+        {
+            return Err(IoError::new(
+                ErrorKind::BrokenPipe,
+                "event consumer closed during drain",
+            ));
         }
     }
     Ok(())

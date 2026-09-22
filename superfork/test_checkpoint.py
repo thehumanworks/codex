@@ -17,8 +17,13 @@ class CheckpointTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.remote = root / "remote.git"
         self.work = root / "work"
-        subprocess.run(["git", "init", "--bare", "--quiet", str(self.remote)], check=True)
-        subprocess.run(["git", "init", "--quiet", "--initial-branch=main", str(self.work)], check=True)
+        subprocess.run(
+            ["git", "init", "--bare", "--quiet", str(self.remote)], check=True
+        )
+        subprocess.run(
+            ["git", "init", "--quiet", "--initial-branch=main", str(self.work)],
+            check=True,
+        )
         previous = Path.cwd()
         os.chdir(self.work)
         self.addCleanup(os.chdir, previous)
@@ -39,15 +44,24 @@ class CheckpointTests(unittest.TestCase):
     def test_publishes_exact_commit_and_does_not_advance_main(self):
         result = publish("source", "12", "1")
         self.assertEqual(result["commit"], self.feature)
-        self.assertEqual(git("ls-remote", "origin", "refs/heads/main").split()[0], self.initial)
-        self.assertEqual(git("ls-remote", "origin", result["ref"]).split()[0], self.feature)
+        self.assertEqual(
+            git("ls-remote", "origin", "refs/heads/main").split()[0], self.initial
+        )
+        self.assertEqual(
+            git("ls-remote", "origin", result["ref"]).split()[0], self.feature
+        )
         self.assertEqual(git("rev-parse", "HEAD"), self.feature)
 
     def test_repeated_checkpoint_is_idempotent(self):
-        self.assertEqual(publish("acceptance", "12", "1"), publish("acceptance", "12", "1"))
+        self.assertEqual(
+            publish("acceptance", "12", "1"), publish("acceptance", "12", "1")
+        )
 
     def test_each_attempt_and_stage_has_a_distinct_ref(self):
-        refs = {publish(stage, "12", attempt)["ref"] for stage, attempt in [("source", "1"), ("source", "2"), ("formatted", "1")]}
+        refs = {
+            publish(stage, "12", attempt)["ref"]
+            for stage, attempt in [("source", "1"), ("source", "2"), ("formatted", "1")]
+        }
         self.assertEqual(len(refs), 3)
 
     def test_changed_tracked_file_is_rejected(self):
@@ -67,14 +81,22 @@ class CheckpointTests(unittest.TestCase):
             publish("source", "12", "1")
 
     def test_invalid_identifiers_and_remote_are_rejected(self):
-        for stage, run, attempt, remote in [("main", "12", "1", "origin"), ("source", "../main", "1", "origin"), ("source", "12", "-1", "origin"), ("source", "12", "1", "--force"), ("source", "12", "1", "unknown")]:
+        for stage, run, attempt, remote in [
+            ("main", "12", "1", "origin"),
+            ("source", "../main", "1", "origin"),
+            ("source", "12", "-1", "origin"),
+            ("source", "12", "1", "--force"),
+            ("source", "12", "1", "unknown"),
+        ]:
             with self.subTest(stage=stage, run=run, attempt=attempt, remote=remote):
                 with self.assertRaises(ValueError):
                     publish(stage, run, attempt, remote)
 
     def test_existing_conflicting_ref_is_never_overwritten(self):
         ref = f"refs/heads/superfork/checkpoints/12-1-source-{self.feature}"
-        subprocess.run(["git", "push", "--quiet", "origin", f"{self.initial}:{ref}"], check=True)
+        subprocess.run(
+            ["git", "push", "--quiet", "origin", f"{self.initial}:{ref}"], check=True
+        )
         with self.assertRaises(ValueError):
             publish("source", "12", "1")
         self.assertEqual(git("ls-remote", "origin", ref).split()[0], self.initial)
@@ -89,6 +111,7 @@ class CheckpointTests(unittest.TestCase):
     def test_mismatching_readback_is_not_reported_as_success(self):
         real = git
         queries = 0
+
         def changed_readback(*args):
             nonlocal queries
             if args[0] == "ls-remote":
@@ -96,6 +119,7 @@ class CheckpointTests(unittest.TestCase):
                 if queries == 2:
                     return ""
             return real(*args)
+
         with patch("checkpoint.git", side_effect=changed_readback):
             with self.assertRaises(RuntimeError):
                 publish("source", "12", "1")

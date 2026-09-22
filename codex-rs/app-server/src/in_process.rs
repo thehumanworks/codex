@@ -56,15 +56,15 @@ use crate::config_manager::ConfigManager;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use crate::in_process_event_delivery::DeliveryPhase;
+use crate::in_process_event_delivery::drain_writer;
+use crate::in_process_event_delivery::drain_writer_until_task_finishes;
+use crate::in_process_event_delivery::route_queued_message;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
-use crate::in_process_event_delivery::DeliveryPhase;
-use crate::in_process_event_delivery::drain_writer;
-use crate::in_process_event_delivery::drain_writer_until_task_finishes;
-use crate::in_process_event_delivery::route_queued_message;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::plugin_config_reload::PluginStartupConfig;
@@ -100,9 +100,9 @@ pub use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ThreadStore;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 use tokio::time::timeout;
 use tokio::time::timeout_at;
-use tokio::time::Instant;
 use tokio_util::task::AbortOnDropHandle;
 use toml::Value as TomlValue;
 use tracing::warn;
@@ -401,11 +401,17 @@ impl InProcessClientHandle {
     /// A second call returns `AlreadyExists`.
     pub async fn begin_shutdown(&self) -> IoResult<InProcessShutdown> {
         if self.shutdown_requested.swap(true, Ordering::AcqRel) {
-            return Err(IoError::new(ErrorKind::AlreadyExists, "shutdown already requested"));
+            return Err(IoError::new(
+                ErrorKind::AlreadyExists,
+                "shutdown already requested",
+            ));
         }
         let (done_tx, done_rx) = oneshot::channel();
         self.shutdown_tx.try_send(done_tx).map_err(|_| {
-            IoError::new(ErrorKind::BrokenPipe, "in-process app-server runtime is closed")
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process app-server runtime is closed",
+            )
         })?;
         Ok(InProcessShutdown {
             done_rx,
@@ -422,7 +428,10 @@ impl InProcessClientHandle {
         drop(self.event_rx);
         let graceful = async {
             let outcome = shutdown.done_rx.await.map_err(|error| {
-                IoError::new(ErrorKind::BrokenPipe, format!("shutdown acknowledgement closed: {error}"))
+                IoError::new(
+                    ErrorKind::BrokenPipe,
+                    format!("shutdown acknowledgement closed: {error}"),
+                )
             })?;
             (&mut runtime_handle).await.map_err(IoError::other)?;
             outcome
@@ -432,7 +441,10 @@ impl InProcessClientHandle {
             Err(_) => {
                 runtime_handle.abort();
                 let _ = runtime_handle.await;
-                Err(IoError::new(ErrorKind::TimedOut, "in-process shutdown deadline exceeded"))
+                Err(IoError::new(
+                    ErrorKind::TimedOut,
+                    "in-process shutdown deadline exceeded",
+                ))
             }
         }
     }
@@ -444,7 +456,8 @@ impl InProcessClientHandle {
         let shutdown = self.begin_shutdown().await?;
         let _ = timeout_at(shutdown.deadline, async {
             while self.next_event().await.is_some() {}
-        }).await;
+        })
+        .await;
         self.finish_shutdown(shutdown).await
     }
 
@@ -535,9 +548,13 @@ async fn start_uninitialized(
         AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
             .await
             .map_err(IoError::other)?;
-    let InProcessStartOptions { thread_store, event_delivery } = options;
+    let InProcessStartOptions {
+        thread_store,
+        event_delivery,
+    } = options;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
-    let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<oneshot::Sender<IoResult<()>>>(/*buffer*/ 1);
+    let (shutdown_tx, mut shutdown_rx) =
+        mpsc::channel::<oneshot::Sender<IoResult<()>>>(/*buffer*/ 1);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
     let runtime_handle = tokio::spawn(async move {
@@ -819,7 +836,8 @@ async fn start_uninitialized(
             while !pending_request_responses.is_empty() {
                 let Some(message) = writer_rx.recv().await else {
                     return Err(IoError::new(
-                        ErrorKind::BrokenPipe, "response writer closed before accepted RPCs drained",
+                        ErrorKind::BrokenPipe,
+                        "response writer closed before accepted RPCs drained",
                     ));
                 };
                 if !route_queued_message(
@@ -829,9 +847,12 @@ async fn start_uninitialized(
                     outgoing_message_sender.as_ref(),
                     event_delivery,
                     DeliveryPhase::Draining,
-                ).await {
+                )
+                .await
+                {
                     return Err(IoError::new(
-                        ErrorKind::BrokenPipe, "event consumer closed while draining accepted RPCs",
+                        ErrorKind::BrokenPipe,
+                        "event consumer closed while draining accepted RPCs",
                     ));
                 }
             }
@@ -843,10 +864,16 @@ async fn start_uninitialized(
                 &event_tx,
                 outgoing_message_sender.as_ref(),
                 event_delivery,
-            ).await
-        }).await {
+            )
+            .await
+        })
+        .await
+        {
             Ok(result) => result,
-            Err(_) => Err(IoError::new(ErrorKind::TimedOut, "request processor drain timed out")),
+            Err(_) => Err(IoError::new(
+                ErrorKind::TimedOut,
+                "request processor drain timed out",
+            )),
         };
         if shutdown_result.is_err() && !processor_handle.is_finished() {
             processor_handle.abort();
@@ -864,15 +891,18 @@ async fn start_uninitialized(
                 &event_tx,
                 outgoing_message_sender.as_ref(),
                 event_delivery,
-            ).await?;
+            )
+            .await?;
             drain_writer(
                 &mut writer_rx,
                 &mut pending_request_responses,
                 &event_tx,
                 outgoing_message_sender.as_ref(),
                 event_delivery,
-            ).await
-        }).await;
+            )
+            .await
+        })
+        .await;
         match outbound_result {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -882,13 +912,15 @@ async fn start_uninitialized(
             Err(_) => {
                 outbound_handle.abort();
                 shutdown_result = shutdown_result.and(Err(IoError::new(
-                    ErrorKind::TimedOut, "outbound event drain timed out",
+                    ErrorKind::TimedOut,
+                    "outbound event drain timed out",
                 )));
             }
         }
         if event_delivery == InProcessEventDelivery::Lossless && !event_consumer_open {
             shutdown_result = shutdown_result.and(Err(IoError::new(
-                ErrorKind::BrokenPipe, "lossless event consumer closed before drain completed",
+                ErrorKind::BrokenPipe,
+                "lossless event consumer closed before drain completed",
             )));
         }
         drop(writer_rx);
@@ -1111,7 +1143,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn in_process_shutdown_waits_for_analytics_flush_budget() {
         let (client_tx, _client_rx) = mpsc::channel(/*buffer*/ 1);
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<oneshot::Sender<IoResult<()>>>(/*buffer*/ 1);
+        let (shutdown_tx, mut shutdown_rx) =
+            mpsc::channel::<oneshot::Sender<IoResult<()>>>(/*buffer*/ 1);
         let (event_tx, event_rx) = mpsc::channel(/*buffer*/ 1);
         let completed = Arc::new(AtomicBool::new(false));
         let runtime_completed = Arc::clone(&completed);

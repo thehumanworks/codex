@@ -4,10 +4,11 @@
 Exact anchors guard the current request-cancellation, response-envelope, and
 analytics-aware shutdown contracts; unknown baselines fail instead of guessing.
 """
+
 from pathlib import Path
 
 root = Path.cwd()
-p = root / 'codex-rs/app-server/src/in_process.rs'
+p = root / "codex-rs/app-server/src/in_process.rs"
 s = p.read_text()
 
 
@@ -17,16 +18,33 @@ def replace(old, new, count=1):
     s = s.replace(old, new)
 
 
-replace('use crate::outgoing_message::OutgoingMessage;', 'use crate::in_process_event_delivery::DeliveryPhase;\nuse crate::in_process_event_delivery::drain_writer;\nuse crate::in_process_event_delivery::drain_writer_until_task_finishes;\nuse crate::in_process_event_delivery::route_queued_message;')
-replace('use tokio::time::timeout;', 'use tokio::time::timeout;\nuse tokio::time::timeout_at;\nuse tokio::time::Instant;\nuse tokio_util::task::AbortOnDropHandle;')
-replace('const IN_PROCESS_CONNECTION_ID:', 'pub(crate) const IN_PROCESS_CONNECTION_ID:')
-replace('type PendingClientRequestResponse =', 'pub(crate) type PendingClientRequestResponse =')
-replace('fn server_notification_requires_delivery(', 'pub(crate) fn server_notification_requires_delivery(')
-replace('    thread_store: Option<Arc<dyn ThreadStore>>,\n}', '    thread_store: Option<Arc<dyn ThreadStore>>,\n    event_delivery: InProcessEventDelivery,\n}')
-replace('''        self.thread_store = Some(thread_store);
+replace(
+    "use crate::outgoing_message::OutgoingMessage;",
+    "use crate::in_process_event_delivery::DeliveryPhase;\nuse crate::in_process_event_delivery::drain_writer;\nuse crate::in_process_event_delivery::drain_writer_until_task_finishes;\nuse crate::in_process_event_delivery::route_queued_message;",
+)
+replace(
+    "use tokio::time::timeout;",
+    "use tokio::time::timeout;\nuse tokio::time::timeout_at;\nuse tokio::time::Instant;\nuse tokio_util::task::AbortOnDropHandle;",
+)
+replace("const IN_PROCESS_CONNECTION_ID:", "pub(crate) const IN_PROCESS_CONNECTION_ID:")
+replace(
+    "type PendingClientRequestResponse =",
+    "pub(crate) type PendingClientRequestResponse =",
+)
+replace(
+    "fn server_notification_requires_delivery(",
+    "pub(crate) fn server_notification_requires_delivery(",
+)
+replace(
+    "    thread_store: Option<Arc<dyn ThreadStore>>,\n}",
+    "    thread_store: Option<Arc<dyn ThreadStore>>,\n    event_delivery: InProcessEventDelivery,\n}",
+)
+replace(
+    """        self.thread_store = Some(thread_store);
         self
     }
-}''', '''        self.thread_store = Some(thread_store);
+}""",
+    """        self.thread_store = Some(thread_store);
         self
     }
 
@@ -49,18 +67,27 @@ pub enum InProcessEventDelivery {
     /// storage or an exactly-once processing guarantee. Forced shutdown can still
     /// discard events and is reported as an error.
     Lossless,
-}''')
-replace('''    Shutdown {
+}""",
+)
+replace(
+    """    Shutdown {
         done_tx: oneshot::Sender<()>,
     },
-''', '')
-replace('''    runtime_handle: tokio::task::JoinHandle<()>,
-''', '''    runtime_handle: AbortOnDropHandle<()>,
+""",
+    "",
+)
+replace(
+    """    runtime_handle: tokio::task::JoinHandle<()>,
+""",
+    """    runtime_handle: AbortOnDropHandle<()>,
     shutdown_tx: mpsc::Sender<oneshot::Sender<IoResult<()>>>,
     shutdown_requested: AtomicBool,
-''')
-replace('''impl InProcessClientHandle {
-''', '''/// Token for a single bounded shutdown attempt.
+""",
+)
+replace(
+    """impl InProcessClientHandle {
+""",
+    """/// Token for a single bounded shutdown attempt.
 ///
 /// Drain the corresponding handle's events before passing this token to
 /// [`InProcessClientHandle::finish_shutdown`]. The deadline starts at admission.
@@ -71,10 +98,13 @@ pub struct InProcessShutdown {
 }
 
 impl InProcessClientHandle {
-''')
-a = s.index('    /// Requests runtime shutdown and waits for worker termination.')
-b = s.index('    pub fn sender(&self)', a)
-s = s[:a] + '''    /// Begin shutdown without blocking on the saturated data or event queues.
+""",
+)
+a = s.index("    /// Requests runtime shutdown and waits for worker termination.")
+b = s.index("    pub fn sender(&self)", a)
+s = (
+    s[:a]
+    + """    /// Begin shutdown without blocking on the saturated data or event queues.
     ///
     /// Call once, keep consuming [`next_event`](Self::next_event) until `None`,
     /// then call [`finish_shutdown`](Self::finish_shutdown). Accepted requests receive
@@ -130,37 +160,62 @@ s = s[:a] + '''    /// Begin shutdown without blocking on the saturated data or 
         self.finish_shutdown(shutdown).await
     }
 
-''' + s[b:]
-replace('''            _ = &mut shutdown_rx => break,''', '''            _ = &mut shutdown_rx => {
+"""
+    + s[b:]
+)
+replace(
+    """            _ = &mut shutdown_rx => break,""",
+    """            _ = &mut shutdown_rx => {
                 outgoing_rx.close();
                 while let Some(envelope) = outgoing_rx.recv().await {
                     route_outgoing_envelope(&mut outbound_connections, envelope).await;
                 }
                 break;
-            },''')
-replace('''    let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
-''', '''    let InProcessStartOptions { thread_store, event_delivery } = options;
+            },""",
+)
+replace(
+    """    let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
+""",
+    """    let InProcessStartOptions { thread_store, event_delivery } = options;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<oneshot::Sender<IoResult<()>>>(/*buffer*/ 1);
-''')
-replace('                thread_store: options.thread_store,', '                thread_store,')
-replace('''        let mut outbound_handle = tokio::spawn(run_outbound_router(
+""",
+)
+replace(
+    "                thread_store: options.thread_store,",
+    "                thread_store,",
+)
+replace(
+    """        let mut outbound_handle = tokio::spawn(run_outbound_router(
             outgoing_rx,
-            outbound_connections,''', '''        let mut outbound_handle = AbortOnDropHandle::new(tokio::spawn(run_outbound_router(
+            outbound_connections,""",
+    """        let mut outbound_handle = AbortOnDropHandle::new(tokio::spawn(run_outbound_router(
             outgoing_rx,
-            outbound_connections,''')
-replace('''            outbound_shutdown_rx,
-        ));''', '''            outbound_shutdown_rx,
-        )));''')
-replace('''        let mut processor_handle = tokio::spawn(async move {''', '''        let mut processor_handle = AbortOnDropHandle::new(tokio::spawn(async move {''')
-replace('''            processor.shutdown_threads().await;
-        });''', '''            processor.shutdown_threads().await;
-        }));''')
-replace('''        let mut shutdown_ack = None;
+            outbound_connections,""",
+)
+replace(
+    """            outbound_shutdown_rx,
+        ));""",
+    """            outbound_shutdown_rx,
+        )));""",
+)
+replace(
+    """        let mut processor_handle = tokio::spawn(async move {""",
+    """        let mut processor_handle = AbortOnDropHandle::new(tokio::spawn(async move {""",
+)
+replace(
+    """            processor.shutdown_threads().await;
+        });""",
+    """            processor.shutdown_threads().await;
+        }));""",
+)
+replace(
+    """        let mut shutdown_ack = None;
 
         loop {
             tokio::select! {
-                message = client_rx.recv() => {''', '''        let mut shutdown_ack = None;
+                message = client_rx.recv() => {""",
+    """        let mut shutdown_ack = None;
         let mut shutdown_requested = false;
         let mut event_consumer_open = true;
 
@@ -185,15 +240,23 @@ replace('''        let mut shutdown_ack = None;
                     shutdown_ack = shutdown;
                     client_rx.close();
                 }
-                message = client_rx.recv() => {''')
-replace('''                        Some(InProcessClientMessage::Shutdown { done_tx }) => {
+                message = client_rx.recv() => {""",
+)
+replace(
+    """                        Some(InProcessClientMessage::Shutdown { done_tx }) => {
                             shutdown_ack = Some(done_tx);
                             break;
                         }
-''', '')
-a = s.index('                    let outgoing_message = queued_message.message;')
-b = s.index('                }\n            }\n        }\n\n        drop(writer_rx);', a)
-s = s[:a] + '''                    if !route_queued_message(
+""",
+    "",
+)
+a = s.index("                    let outgoing_message = queued_message.message;")
+b = s.index(
+    "                }\n            }\n        }\n\n        drop(writer_rx);", a
+)
+s = (
+    s[:a]
+    + """                    if !route_queued_message(
                         queued_message,
                         &mut pending_request_responses,
                         &event_tx,
@@ -204,10 +267,14 @@ s = s[:a] + '''                    if !route_queued_message(
                         event_consumer_open = false;
                         break;
                     }
-''' + s[b:]
-a = s.index('        drop(writer_rx);')
-b = s.index('        analytics_events_flush_client.flush().await;', a)
-s = s[:a] + '''        client_rx.close();
+"""
+    + s[b:]
+)
+a = s.index("        drop(writer_rx);")
+b = s.index("        analytics_events_flush_client.flush().await;", a)
+s = (
+    s[:a]
+    + """        client_rx.close();
         drop(processor_tx);
         outgoing_message_sender
             .cancel_all_requests(Some(internal_error(
@@ -283,43 +350,70 @@ s = s[:a] + '''        client_rx.close();
         // two-phase consumers can finish draining and join within the same budget.
         drop(event_tx);
 
-''' + s[b:]
-replace('''            let _ = done_tx.send(());
+"""
+    + s[b:]
+)
+replace(
+    """            let _ = done_tx.send(());
         }
-    });''', '''            let _ = done_tx.send(shutdown_result);
+    });""",
+    """            let _ = done_tx.send(shutdown_result);
         }
-    });''')
-replace('''        runtime_handle,
-        #[cfg(test)]''', '''        runtime_handle: AbortOnDropHandle::new(runtime_handle),
+    });""",
+)
+replace(
+    """        runtime_handle,
+        #[cfg(test)]""",
+    """        runtime_handle: AbortOnDropHandle::new(runtime_handle),
         shutdown_tx,
         shutdown_requested: AtomicBool::new(false),
-        #[cfg(test)]''')
+        #[cfg(test)]""",
+)
 # Preserve the existing analytics-budget test with the out-of-band handshake.
-replace('''        let (client_tx, mut client_rx) = mpsc::channel(/*buffer*/ 1);
-        let (_event_tx, event_rx) = mpsc::channel(/*buffer*/ 1);''', '''        let (client_tx, _client_rx) = mpsc::channel(/*buffer*/ 1);
+replace(
+    """        let (client_tx, mut client_rx) = mpsc::channel(/*buffer*/ 1);
+        let (_event_tx, event_rx) = mpsc::channel(/*buffer*/ 1);""",
+    """        let (client_tx, _client_rx) = mpsc::channel(/*buffer*/ 1);
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<oneshot::Sender<IoResult<()>>>(/*buffer*/ 1);
-        let (event_tx, event_rx) = mpsc::channel(/*buffer*/ 1);''')
-replace('''            let done_tx = match client_rx.recv().await {
+        let (event_tx, event_rx) = mpsc::channel(/*buffer*/ 1);""",
+)
+replace(
+    """            let done_tx = match client_rx.recv().await {
                 Some(InProcessClientMessage::Shutdown { done_tx }) => done_tx,
                 _ => panic!("expected in-process shutdown request"),
-            };''', '''            let done_tx = shutdown_rx.recv().await.expect("expected shutdown request");
-            drop(event_tx);''')
-replace('''            let _ = done_tx.send(());
-        });''', '''            let _ = done_tx.send(Ok(()));
-        });''')
-replace('''            runtime_handle,
-            _test_codex_home: None,''', '''            runtime_handle: AbortOnDropHandle::new(runtime_handle),
+            };""",
+    """            let done_tx = shutdown_rx.recv().await.expect("expected shutdown request");
+            drop(event_tx);""",
+)
+replace(
+    """            let _ = done_tx.send(());
+        });""",
+    """            let _ = done_tx.send(Ok(()));
+        });""",
+)
+replace(
+    """            runtime_handle,
+            _test_codex_home: None,""",
+    """            runtime_handle: AbortOnDropHandle::new(runtime_handle),
             shutdown_tx,
             shutdown_requested: AtomicBool::new(false),
-            _test_codex_home: None,''')
-replace('''//! Command submission uses `try_send` and can return `WouldBlock`, while event
-//! fanout may drop notifications under saturation.''', '''//! Command submission uses `try_send` and can return `WouldBlock`. Default event
+            _test_codex_home: None,""",
+)
+replace(
+    """//! Command submission uses `try_send` and can return `WouldBlock`, while event
+//! fanout may drop notifications under saturation.""",
+    """//! Command submission uses `try_send` and can return `WouldBlock`. Default event
 //! fanout may drop notifications under saturation; opt-in lossless delivery waits
-//! for bounded capacity, requiring the host to consume events concurrently.''')
-s += '''\n#[cfg(test)]\n#[path = "in_process_lossless_tests.rs"]\nmod lossless_tests;\n'''
+//! for bounded capacity, requiring the host to consume events concurrently.""",
+)
+s += """\n#[cfg(test)]\n#[path = "in_process_lossless_tests.rs"]\nmod lossless_tests;\n"""
 p.write_text(s)
-lib = root / 'codex-rs/app-server/src/lib.rs'
+lib = root / "codex-rs/app-server/src/lib.rs"
 s = lib.read_text()
-assert s.count('pub mod in_process;') == 1
-lib.write_text(s.replace('pub mod in_process;', 'pub mod in_process;\nmod in_process_event_delivery;'))
-print('Lossless runtime port applied; behavioral verification is still required.')
+assert s.count("pub mod in_process;") == 1
+lib.write_text(
+    s.replace(
+        "pub mod in_process;", "pub mod in_process;\nmod in_process_event_delivery;"
+    )
+)
+print("Lossless runtime port applied; behavioral verification is still required.")

@@ -10,7 +10,15 @@ import os
 import re
 import subprocess
 
-STAGES = ("source", "formatted", "acceptance", "affected", "smoke", "workspace", "failure")
+STAGES = (
+    "source",
+    "formatted",
+    "acceptance",
+    "affected",
+    "smoke",
+    "workspace",
+    "failure",
+)
 
 
 def git(*args):
@@ -27,7 +35,9 @@ def publish(stage, run_id, attempt, remote="origin"):
     if remote not in git("remote").splitlines():
         raise ValueError("remote is not configured")
     if git("status", "--porcelain", "--untracked-files=normal"):
-        raise ValueError("commit or explicitly exclude all changes before checkpointing")
+        raise ValueError(
+            "commit or explicitly exclude all changes before checkpointing"
+        )
     sha = git("rev-parse", "HEAD")
     ref = f"refs/heads/superfork/checkpoints/{run_id}-{attempt}-{stage}-{sha}"
     subprocess.run(["git", "check-ref-format", ref], check=True)
@@ -45,7 +55,11 @@ def publish(stage, run_id, attempt, remote="origin"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", choices=STAGES)
-    parser.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID"), required="GITHUB_RUN_ID" not in os.environ)
+    parser.add_argument(
+        "--run-id",
+        default=os.environ.get("GITHUB_RUN_ID"),
+        required="GITHUB_RUN_ID" not in os.environ,
+    )
     parser.add_argument("--attempt", default=os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
     args = parser.parse_args()
     result = publish(args.stage, args.run_id, args.attempt)
@@ -53,7 +67,9 @@ def main():
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(f"\nCheckpoint `{result['stage']}`: `{result['commit']}`\n\n`{result['ref']}`\n")
+            handle.write(
+                f"\nCheckpoint `{result['stage']}`: `{result['commit']}`\n\n`{result['ref']}`\n"
+            )
 
 
 if __name__ == "__main__":

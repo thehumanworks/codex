@@ -12,7 +12,9 @@ class VerificationSummaryTests(unittest.TestCase):
         self.log = Path(self.temp.name) / "test.log"
 
     def test_records_executed_tests_and_explicit_retries(self):
-        self.log.write_text("RETRY 1/2 example\n\x1b[32;1mSummary [ 1.2s]\x1b[0m 17 tests run: 17 passed, 350 skipped\n")
+        self.log.write_text(
+            "RETRY 1/2 example\n\x1b[32;1mSummary [ 1.2s]\x1b[0m 17 tests run: 17 passed, 350 skipped\n"
+        )
         result = nextest_summary(self.log)
         self.assertEqual(result["tests_run"], 17)
         self.assertEqual(result["retries"], ["RETRY 1/2 example"])
@@ -33,7 +35,9 @@ class VerificationSummaryTests(unittest.TestCase):
             nextest_summary(self.log)
 
     def test_concatenated_attempts_are_not_a_single_passing_run(self):
-        self.log.write_text("Summary [ 1.2s] 17 tests run: 16 passed, 1 failed\nSummary [ 1.2s] 17 tests run: 17 passed\n")
+        self.log.write_text(
+            "Summary [ 1.2s] 17 tests run: 16 passed, 1 failed\nSummary [ 1.2s] 17 tests run: 17 passed\n"
+        )
         with self.assertRaises(ValueError):
             nextest_summary(self.log)
 
