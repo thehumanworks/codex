@@ -1,0 +1,63 @@
+name: Harness baseline regression
+
+on:
+  push:
+    branches: [superfork/harness-delivery-2026-09-22]
+    paths: [.github/workflows/harness-baseline-check.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    if: github.repository == 'thehumanworks/codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '4'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4631a92ae60616c02d5c6c58ef3275d5c01c5ba0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install native prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap clang lld
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/codex-ci/cargo-target
+          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-baseline-v1
+          restore-keys: harness-linux-1.95-
+      - name: Baseline auth regression tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/baseline-evidence"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/baseline-evidence/sha.txt"
+          set -o pipefail
+          just test --locked -p codex-login --lib 2>&1 | tee "$RUNNER_TEMP/baseline-evidence/login-tests.log"
+      - name: Baseline embedded runtime regression tests
+        run: |
+          set -o pipefail
+          just test --locked -p codex-app-server --lib -E 'test(in_process)' 2>&1 | tee "$RUNNER_TEMP/baseline-evidence/in-process-tests.log"
+      - name: Retain executed baseline evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: harness-baseline-${{ github.run_id }}
+          path: ${{ runner.temp }}/baseline-evidence/
+          retention-days: 14
