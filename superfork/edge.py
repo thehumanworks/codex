@@ -24,20 +24,30 @@ FEATURES = (
 
 def command(binary: Path, arguments: Sequence[str]) -> list[str]:
     """Build an argv, never a shell expression, without changing caller arguments."""
-    return [str(binary), *[part for feature in FEATURES for part in ("--enable", feature)], *arguments]
+    return [
+        str(binary),
+        *[part for feature in FEATURES for part in ("--enable", feature)],
+        *arguments,
+    ]
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     root = Path(__file__).resolve().parent.parent
-    default = os.environ.get("CODEX_EDGE_BIN", str(root / "codex-rs/target/release/codex"))
+    default = os.environ.get(
+        "CODEX_EDGE_BIN", str(root / "codex-rs/target/release/codex")
+    )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex-bin", type=Path, default=Path(default))
-    parser.add_argument("codex_args", nargs=argparse.REMAINDER, help="Codex arguments, after --")
+    parser.add_argument(
+        "codex_args", nargs=argparse.REMAINDER, help="Codex arguments, after --"
+    )
     args = parser.parse_args(argv)
     try:
         binary = args.codex_bin.expanduser().resolve(strict=True)
     except OSError as error:
-        parser.error(f"Fork executable is unavailable: {error}. Build codex-cli or set --codex-bin.")
+        parser.error(
+            f"Fork executable is unavailable: {error}. Build codex-cli or set --codex-bin."
+        )
     if not binary.is_file() or not os.access(binary, os.X_OK):
         parser.error("--codex-bin must name an executable file")
     arguments = args.codex_args

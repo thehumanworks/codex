@@ -20,7 +20,13 @@ def main():
         home = Path(temporary)
         env = dict(os.environ)
         env["CODEX_HOME"] = temporary
-        for key in ("OPENAI_API_KEY", "CHATGPT_AUTH_TOKEN", "CHATGPT_ACCOUNT_ID", "CODEX_ACCESS_TOKEN", "CODEX_EDGE_BIN"):
+        for key in (
+            "OPENAI_API_KEY",
+            "CHATGPT_AUTH_TOKEN",
+            "CHATGPT_ACCOUNT_ID",
+            "CODEX_ACCESS_TOKEN",
+            "CODEX_EDGE_BIN",
+        ):
             env.pop(key, None)
         config = home / "config.toml"
         original = 'approval_policy = "on-request"\nsandbox_mode = "read-only"\n'
@@ -30,7 +36,15 @@ def main():
             for feature in disabled:
                 args.extend(("--disable", feature))
             args.extend(("features", "list"))
-            result = subprocess.run(args, cwd=home, env=env, capture_output=True, text=True, check=True, timeout=45)
+            result = subprocess.run(
+                args,
+                cwd=home,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=45,
+            )
             states = {}
             for line in result.stdout.splitlines():
                 parts = line.split()
@@ -39,10 +53,16 @@ def main():
             expected = {feature: feature not in disabled for feature in FEATURES}
             actual = {feature: states.get(feature) for feature in FEATURES}
             if actual != expected:
-                raise AssertionError(f"Unexpected feature resolution: {actual}; expected {expected}")
+                raise AssertionError(
+                    f"Unexpected feature resolution: {actual}; expected {expected}"
+                )
             if config.read_text() != original or (home / "auth.json").exists():
-                raise AssertionError("Launcher modified persistent configuration or credentials")
-            print(f"PASS: real CLI feature resolution; disabled={list(disabled)}; persistent config unchanged")
+                raise AssertionError(
+                    "Launcher modified persistent configuration or credentials"
+                )
+            print(
+                f"PASS: real CLI feature resolution; disabled={list(disabled)}; persistent config unchanged"
+            )
     print("PASS: 2 native CLI controls, with explicit user-disable precedence")
 
 
