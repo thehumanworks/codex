@@ -1,0 +1,111 @@
+name: Build Codex Superfork
+
+on:
+  push:
+    branches: [superfork/harness-edge-2026-09-22]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: ${{ !contains(github.event.head_commit.message, '[superfork-bot]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Configure integration
+        run: |
+          git config user.name "codex-superfork-bot"
+          git config user.email "codex-superfork-bot@users.noreply.github.com"
+          git remote add upstream https://github.com/openai/codex.git || true
+          git fetch upstream main \
+            0e35d88be194e41e035ffb65b5f61ae12cf156d2 \
+            a0ce4abc4069f91e3296ada835cbaf95a6ff0b75 \
+            ec3b1ca18f25386d7224c06a74bab6eeef407c6e \
+            a6a349f2f095e8299aeca4bb36e91b12b880f699 \
+            68815edc1842771cba1daf69b75febe064c44d7a \
+            16d35f17ee1b30282e8f85e149ef01536e14dcc5 \
+            0082977cebb9fbd524046914dbc4305e5b8e0b95 \
+            c50e47b8a752659c4efca74c932543e55378a452 \
+            49b1987014a011e266e2ae97712ea6945cab0a46 \
+            e516191075988512a3841b6fa518b29731a3bd5f \
+            27a561b18f5e45dc5fd489437b8ddd4d8b26dc97 \
+            218e45801afa0ab3a4c8bc6334d6bbf2d1e33925 \
+            d546866b457aa4fc46342c42e2b6bfc05aa31aa6 \
+            c621ca2c2fe903fd24c19fae9cfbf72ec952f8b1 \
+            d8f46711a787e9ce3af45ef8f82d1bf939c1832a \
+            06de313df18e01fb2dc0a873141f9ad15abf50a6 \
+            25394befedeef9a4ef4180d54e07f00f13fd9e32 \
+            bc4b55c09c0c4beccc1cac4825f21856272edac6 \
+            923df3e976a315019f4e2530070b8fd102d38e30
+      - name: Integrate ranked candidates
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p superfork
+          : > superfork/integration-results.tsv
+          try_candidate() {
+            name="$1"; shift
+            before="$(git rev-parse HEAD)"
+            echo "::group::$name"
+            if git cherry-pick "$@"; then
+              printf '%s\tmerged\t%s\n' "$name" "$(git rev-parse HEAD)" >> superfork/integration-results.tsv
+              echo "Merged $name"
+            else
+              git cherry-pick --abort || true
+              git reset --hard "$before"
+              printf '%s\tskipped-conflict\t%s\n' "$name" "$before" >> superfork/integration-results.tsv
+              echo "Skipped $name because it conflicts with current main"
+            fi
+            echo "::endgroup::"
+          }
+          try_candidate "agent-communication-v2" 0e35d88be194e41e035ffb65b5f61ae12cf156d2 a0ce4abc4069f91e3296ada835cbaf95a6ff0b75
+          try_candidate "app-server-lossless-events" ec3b1ca18f25386d7224c06a74bab6eeef407c6e a6a349f2f095e8299aeca4bb36e91b12b880f699 68815edc1842771cba1daf69b75febe064c44d7a 16d35f17ee1b30282e8f85e149ef01536e14dcc5
+          try_candidate "async-command-hooks" 0082977cebb9fbd524046914dbc4305e5b8e0b95 c50e47b8a752659c4efca74c932543e55378a452 49b1987014a011e266e2ae97712ea6945cab0a46 e516191075988512a3841b6fa518b29731a3bd5f 27a561b18f5e45dc5fd489437b8ddd4d8b26dc97 218e45801afa0ab3a4c8bc6334d6bbf2d1e33925
+          try_candidate "agent-hooks" d546866b457aa4fc46342c42e2b6bfc05aa31aa6 c621ca2c2fe903fd24c19fae9cfbf72ec952f8b1 d8f46711a787e9ce3af45ef8f82d1bf939c1832a 06de313df18e01fb2dc0a873141f9ad15abf50a6 25394befedeef9a4ef4180d54e07f00f13fd9e32 bc4b55c09c0c4beccc1cac4825f21856272edac6
+          try_candidate "external-agent-memory-import" 923df3e976a315019f4e2530070b8fd102d38e30
+          git add superfork/integration-results.tsv
+          git commit -m "docs(superfork): record integration results [superfork-bot]" || true
+      - name: Verify formatting and compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd codex-rs
+          cargo fmt --all -- --check
+          cargo check --locked -p codex-core -p codex-hooks -p codex-state -p codex-app-server --tests
+      - name: Document and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > superfork/README.md <<'EOF'
+          # Codex Harness Superfork
+
+          Built from OpenAI Codex main on 2026-09-22, with ranked unmerged upstream feature branches evaluated for harness value and bleeding-edge novelty.
+
+          Ranking:
+          1. agent-communication-v2 — first-class structured inter-agent communication lifecycle/metadata; highest direct orchestration value.
+          2. app-server-lossless-events — lossless in-process event delivery and shutdown draining; strong durability/event-driven harness value.
+          3. async-command-hooks — detached asynchronous hooks; strong non-blocking extensibility value.
+          4. agent-hooks — agent/prompt-driven hooks; powerful programmable harness lifecycle extension.
+          5. external-agent-memory-import — imports external agent memory; strong portability/persistent-agent value, but broadest/riskiest patch.
+
+          The exact merge outcome is in integration-results.tsv. Candidates that conflict with current main are deliberately skipped rather than weakening current upstream behavior.
+          EOF
+          git add superfork/README.md
+          git commit -m "docs(superfork): add ranking and integration notes [superfork-bot]" || true
+          git push origin HEAD:superfork/harness-edge-2026-09-22
+          git archive --format=zip --prefix=codex-superfork/ HEAD > codex-superfork.zip
+          sha256sum codex-superfork.zip > codex-superfork.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-superfork
+          path: |
+            codex-superfork.zip
+            codex-superfork.zip.sha256
+            superfork/integration-results.tsv
+          retention-days: 30
