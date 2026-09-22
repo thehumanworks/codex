@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Update the existing auth controls for the current handshake and source layout.
+"""Adapt existing auth controls to the current handshake and source layout.
 
-No auth assertions are removed. The same suite can exercise an unpackaged,
+No auth assertions are removed. The same suite exercises an unpackaged,
 embedded TUI or an explicitly supplied complete package with a shared daemon.
 """
 
@@ -51,6 +51,17 @@ replacements = [
     (
         '            [str(BINARY), "--no-alt-screen", "hello"],\n',
         '''            [str(BINARY), *([] if PACKAGED_TUI else ["--no-daemon"]), "--no-alt-screen", "hello"],
+''',
+    ),
+    (
+        '            self.assertNotIn("Sign in with ChatGPT", text)\n',
+        '''            self.assertNotIn("Sign in with ChatGPT", text)
+            if PACKAGED_TUI:
+                self.assertNotIn("Running without the shared background server", text)
+                self.assertTrue(
+                    (self.home / "app-server-daemon" / "daemon.pid").is_file(),
+                    "packaged TUI did not start its isolated shared daemon",
+                )
 ''',
     ),
     (
