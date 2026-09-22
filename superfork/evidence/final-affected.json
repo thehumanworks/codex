@@ -1,0 +1,16 @@
+{
+  "stage": "affected",
+  "status": "stage-passed-not-default-branch-delivery",
+  "tested_commit": "d3253df5ce1a929b888ca450fd0ba2d1d50005b0",
+  "tested_code_tree": "5f8fab505a1d147119496b51346a0f618c27c9d3",
+  "workflow_run": "35735401977",
+  "platform": "Linux x86_64",
+  "affected_suites": {
+    "summary": "Summary [ 741.901s] 1814 tests run: 1814 passed (5 slow, 1 flaky), 2 skipped",
+    "tests_run": 1814,
+    "retries": [
+      "RETRY 2/2 [         ] (\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500) codex-app-server::all suite::v2::turn_start_zsh_fork::turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2",
+      "FLAKY 2/2 [  11.106s] (1779/1814) codex-app-server::all suite::v2::turn_start_zsh_fork::turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2"
+    ]
+  }
+}
