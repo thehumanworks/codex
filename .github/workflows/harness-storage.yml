@@ -1,0 +1,152 @@
+name: Harness storage integration
+
+on:
+  push:
+    branches: [superfork/harness-delivery-2026-09-22]
+    paths: [.github/workflows/harness-storage.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harness-feature-integration
+  cancel-in-progress: false
+
+jobs:
+  storage:
+    if: github.repository == 'thehumanworks/codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '4'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Native prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap clang lld
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/codex-ci/cargo-target
+          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-storage-v1
+          restore-keys: harness-linux-1.95-
+      - name: Merge pinned source with reviewed semantic adaptation
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/storage-evidence"
+          git config user.name 'Codex Superfork Integration'
+          git config user.email '178243268+thehumanworks@users.noreply.github.com'
+          git fetch --no-tags --filter=blob:none --unshallow origin superfork/harness-delivery-2026-09-22
+          git remote add upstream https://github.com/openai/codex.git
+          source=ec3b1ca18f25386d7224c06a74bab6eeef407c6e
+          git fetch --no-tags --filter=blob:none upstream "$source"
+          before=$(git rev-parse HEAD)
+          git show --no-patch --format=fuller "$source" > "$RUNNER_TEMP/storage-evidence/source.txt"
+          git diff --stat "$before...$source" > "$RUNNER_TEMP/storage-evidence/source-stat.txt"
+          git merge --no-ff --no-commit "$source" || test -f .git/MERGE_HEAD
+          test "$(git rev-parse MERGE_HEAD)" = "$source"
+          export BEFORE="$before"
+          python3 - <<'PY'
+          import os, subprocess
+          expected = {
+              'codex-rs/app-server/src/in_process.rs',
+              'codex-rs/app-server/src/lib.rs',
+              'codex-rs/app-server/src/message_processor.rs',
+              'codex-rs/app-server/src/message_processor_tracing_tests.rs',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=U'], text=True).splitlines())
+          assert actual <= expected, f'Unexpected conflicts: {actual - expected}'
+          subprocess.run(['git', 'restore', '--source=' + os.environ['BEFORE'], '--staged', '--worktree', '--', *sorted(expected)], check=True)
+          PY
+          python3 superfork/ports/storage.py
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git add codex-rs/app-server/src
+          git diff --cached --check -- codex-rs/app-server/src
+          git commit -m 'feat(superfork): merge host-owned thread storage with queue isolation' -m "Source: openai/codex@$source. Preserve current auth initialization, verification, startup tasks, and config-derived default storage. Custom stores do not inherit unrelated SQLite queues."
+          git merge-base --is-ancestor "$source" HEAD
+          git merge-base --is-ancestor 4631a92ae60616c02d5c6c58ef3275d5c01c5ba0 HEAD
+      - name: Scoped lint fixes and required repository formatting
+        run: |
+          set -euo pipefail
+          just fix -p codex-app-server --locked 2>&1 | tee "$RUNNER_TEMP/storage-evidence/clippy.log"
+          just fmt 2>&1 | tee "$RUNNER_TEMP/storage-evidence/format.log"
+          git add codex-rs/app-server/src superfork
+          if ! git diff --cached --quiet; then
+            git commit -m 'style(superfork): format and lint the storage integration'
+          fi
+          git diff --exit-code
+          just fmt-check 2>&1 | tee "$RUNNER_TEMP/storage-evidence/format-check.log"
+          git rev-parse HEAD > "$RUNNER_TEMP/storage-evidence/tested-sha.txt"
+      - name: Storage acceptance and embedded-runtime regression tests
+        run: |
+          set -euo pipefail
+          just test --locked -p codex-app-server --lib -E 'test(in_process)' 2>&1 | tee "$RUNNER_TEMP/storage-evidence/acceptance.log"
+          just test --locked -p codex-app-server --lib 2>&1 | tee "$RUNNER_TEMP/storage-evidence/app-server-unit.log"
+      - name: Verify dependent embedding clients compile
+        run: |
+          set -euo pipefail
+          cd codex-rs
+          cargo check --locked -p codex-app-server-client -p codex-exec -p codex-tui 2>&1 | tee "$RUNNER_TEMP/storage-evidence/client-check.log"
+      - name: Record successful checkpoint and push integration branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p superfork/evidence
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'storage-evidence'
+          def summaries(name):
+              text = re.sub(r'\x1b\[[0-9;]*m', '', (evidence / name).read_text())
+              return [line for line in text.splitlines() if 'Summary [' in line or 'tests run:' in line]
+          result = {
+              'feature': 'injected-thread-store',
+              'status': 'scoped-checkpoint-passed-not-final-delivery',
+              'tested_commit': (evidence / 'tested-sha.txt').read_text().strip(),
+              'source_commit': 'ec3b1ca18f25386d7224c06a74bab6eeef407c6e',
+              'workflow_run': os.environ['GITHUB_RUN_ID'],
+              'checks': ['just fix -p codex-app-server --locked', 'just fmt', 'just fmt-check', "just test --locked -p codex-app-server --lib -E 'test(in_process)'", 'just test --locked -p codex-app-server --lib', 'cargo check --locked -p codex-app-server-client -p codex-exec -p codex-tui'],
+              'acceptance_summary': summaries('acceptance.log'),
+              'unit_summary': summaries('app-server-unit.log'),
+              'limitations': ['Full app-server integration suite and combined core/workspace checks remain required before default-branch promotion.', 'Injected stores disable the ambient SQLite queue; the host owns persistence durability.'],
+          }
+          Path('superfork/evidence/storage-checkpoint.json').write_text(json.dumps(result, indent=2) + '\n')
+          PY
+          git add superfork/evidence/storage-checkpoint.json
+          git commit -m 'docs(superfork): record executed storage checkpoint evidence'
+          gh auth setup-git
+          git push origin HEAD:refs/heads/superfork/harness-delivery-2026-09-22
+      - name: Retain source, results, and proposed tree on failure
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/storage-evidence"
+          git diff HEAD > "$RUNNER_TEMP/storage-evidence/uncommitted.patch"
+          git log -5 --format=fuller > "$RUNNER_TEMP/storage-evidence/commits.txt"
+          git archive --format=tar.gz --prefix=codex-storage/ HEAD > "$RUNNER_TEMP/storage-evidence/source.tar.gz"
+      - name: Upload full checkpoint logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: harness-storage-${{ github.run_id }}
+          path: ${{ runner.temp }}/storage-evidence/
+          retention-days: 14
