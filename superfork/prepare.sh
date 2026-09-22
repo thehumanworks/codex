@@ -56,14 +56,15 @@ assert not any(line.startswith(('<<<<<<< ', '=======', '>>>>>>> ')) for line in 
 p.write_text(text)
 PY
   git add codex-rs/login/src/lib.rs
-  git diff --cached --check
+  git diff --cached --check -- codex-rs/login/src/lib.rs
   git commit --no-edit
 fi
 baseline=$(git rev-parse HEAD)
 git merge-base --is-ancestor "$initial" "$baseline"
 git merge-base --is-ancestor "$upstream" "$baseline"
 printf 'combined_baseline\t%s\n' "$baseline" >> superfork/evidence/baseline.tsv
-printf 'Preserved fork ChatGPT environment exports and upstream AuthRuntimeConfig export; no auth behavior intentionally removed. Runtime verification remains required.\n' > superfork/evidence/baseline-resolution.txt
+printf 'Preserved fork ChatGPT environment exports and upstream AuthRuntimeConfig export; no auth behavior intentionally removed. Runtime verification remains required. Upstream snapshot whitespace is unchanged and excluded from the resolution-only whitespace check.\n' > superfork/evidence/baseline-resolution.txt
+git archive --format=tar.gz --prefix=codex-baseline/ "$baseline" > "$review/baseline.tar.gz"
 cat > "$review/candidates.tsv" <<'EOF'
 communication a0ce4abc4069f91e3296ada835cbaf95a6ff0b75
 lossless 16d35f17ee1b30282e8f85e149ef01536e14dcc5
@@ -109,7 +110,6 @@ while read -r name source; do
   git worktree remove "$probe"
 done < "$review/candidates.tsv"
 cat superfork/evidence/baseline.tsv superfork/evidence/candidate-probes.tsv
-git archive --format=tar.gz --prefix=codex-baseline/ "$baseline" > "$review/baseline.tar.gz"
 cp -R superfork/evidence "$review/evidence"
 git add superfork/evidence
 git commit -m 'docs(superfork): record preserved baseline and candidate compatibility probes'
