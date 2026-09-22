@@ -806,15 +806,36 @@ async fn start_uninitialized(
         }
 
         client_rx.close();
-        drop(processor_tx);
         outgoing_message_sender
             .cancel_all_requests(Some(internal_error(
                 "in-process app-server runtime is shutting down",
             )))
             .await;
 
-        let mut shutdown_result = match timeout(
-            SHUTDOWN_TIMEOUT,
+        // Keep the RPC execution gate open until accepted responses have drained.
+        // process_client_request enqueues work; returning from it is not completion.
+        // Both response draining and processor teardown share this existing budget.
+        let mut shutdown_result = match timeout(SHUTDOWN_TIMEOUT, async {
+            while !pending_request_responses.is_empty() {
+                let Some(message) = writer_rx.recv().await else {
+                    return Err(IoError::new(
+                        ErrorKind::BrokenPipe, "response writer closed before accepted RPCs drained",
+                    ));
+                };
+                if !route_queued_message(
+                    message,
+                    &mut pending_request_responses,
+                    &event_tx,
+                    outgoing_message_sender.as_ref(),
+                    event_delivery,
+                    DeliveryPhase::Draining,
+                ).await {
+                    return Err(IoError::new(
+                        ErrorKind::BrokenPipe, "event consumer closed while draining accepted RPCs",
+                    ));
+                }
+            }
+            drop(processor_tx);
             drain_writer_until_task_finishes(
                 &mut processor_handle,
                 &mut writer_rx,
@@ -822,8 +843,8 @@ async fn start_uninitialized(
                 &event_tx,
                 outgoing_message_sender.as_ref(),
                 event_delivery,
-            ),
-        ).await {
+            ).await
+        }).await {
             Ok(result) => result,
             Err(_) => Err(IoError::new(ErrorKind::TimedOut, "request processor drain timed out")),
         };
@@ -1181,3 +1202,7 @@ mod stores_tests;
 #[cfg(test)]
 #[path = "in_process_lossless_tests.rs"]
 mod lossless_tests;
+
+#[cfg(test)]
+#[path = "in_process_shutdown_drain_tests.rs"]
+mod shutdown_drain_tests;
