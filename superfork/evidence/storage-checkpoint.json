@@ -1,0 +1,25 @@
+{
+  "feature": "injected-thread-store",
+  "status": "scoped-checkpoint-passed-not-final-delivery",
+  "tested_commit": "c0d7c7db93cc6d132b529ef4fef7b9477d9052ec",
+  "source_commit": "ec3b1ca18f25386d7224c06a74bab6eeef407c6e",
+  "workflow_run": "35724545000",
+  "checks": [
+    "just fix -p codex-app-server --locked",
+    "just fmt",
+    "just fmt-check",
+    "just test --locked -p codex-app-server --lib -E 'test(in_process)'",
+    "just test --locked -p codex-app-server --lib",
+    "cargo check --locked -p codex-app-server-client -p codex-exec -p codex-tui"
+  ],
+  "acceptance_summary": [
+    "     Summary [   0.916s] 8 tests run: 8 passed, 350 skipped"
+  ],
+  "unit_summary": [
+    "     Summary [  11.701s] 358 tests run: 358 passed, 0 skipped"
+  ],
+  "limitations": [
+    "Full app-server integration suite and combined core/workspace checks remain required before default-branch promotion.",
+    "Injected stores disable the ambient SQLite queue; the host owns persistence durability."
+  ]
+}
