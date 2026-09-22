@@ -169,7 +169,7 @@ async fn in_process_request_cancellation_survives_the_transport_changes() {
 async fn in_process_command_overload_remains_explicit() {
     let (client_tx, _client_rx) = mpsc::channel(/*buffer*/ 1);
     let sender = InProcessClientSender { client_tx };
-    sender.notify(ClientNotification::Initialized).await.expect("first command fits");
+    sender.notify(ClientNotification::Initialized).expect("first command fits");
     let error = timeout(SHUTDOWN_TIMEOUT, sender.request(ClientRequest::ConfigRequirementsRead {
         request_id: RequestId::Integer(8),
         params: None,
