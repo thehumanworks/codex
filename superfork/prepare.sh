@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Preparation is deterministic against pinned upstream and fork SHAs.
 set -euo pipefail
 upstream=d3e584093222018fc27919403aea149ccfd3bb38
 initial=e3bd229c57231a4cf985cfd3100ff982dcd8cb7d
