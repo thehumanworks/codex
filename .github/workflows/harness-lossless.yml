@@ -1,5 +1,4 @@
-name: Harness lossless and combined verification
-# Final integration branch gate.
+name: Harness verification with checkpoints
 
 on:
   push:
@@ -11,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: harness-feature-integration
+  group: harness-checkpointed-verification
   cancel-in-progress: false
 
 jobs:
@@ -24,11 +23,36 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Apply the reproduced RPC shutdown repair and verify harness helpers
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/harness-verification"
+          echo "EVIDENCE=$RUNNER_TEMP/harness-verification" >> "$GITHUB_ENV"
+          git config user.name 'Codex Superfork Integration'
+          git config user.email '178243268+thehumanworks@users.noreply.github.com'
+          git fetch --no-tags --filter=blob:none --unshallow origin superfork/harness-final-2026-09-22
+          git merge-base --is-ancestor 16d35f17ee1b30282e8f85e149ef01536e14dcc5 HEAD
+          git merge-base --is-ancestor e3bd229c57231a4cf985cfd3100ff982dcd8cb7d HEAD
+          git merge-base --is-ancestor d3e584093222018fc27919403aea149ccfd3bb38 HEAD
+          if ! grep -q 'Keep the RPC execution gate open' codex-rs/app-server/src/in_process.rs; then
+            python3 superfork/ports/fix_shutdown_drain.py
+          fi
+          python3 -m unittest discover -s superfork -p 'test_*.py' -v 2>&1 | tee "$RUNNER_TEMP/harness-verification/helpers.log"
+          git add codex-rs/app-server/src
+          if ! git diff --cached --quiet; then
+            git diff --cached --check
+            git commit -m 'fix(app-server): finish admitted RPCs before closing the connection gate'
+          fi
+      - name: Publish repaired source before long builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash superfork/publish_stage.sh source
       - uses: ./.github/actions/setup-ci
       - name: Native prerequisites
         run: |
@@ -42,199 +66,109 @@ jobs:
       - uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-unknown-linux-gnu
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: cache
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cache/codex-ci/cargo-target
-          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-lossless-v1
+          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: harness-linux-1.95-
-      - name: Merge source history and apply reviewed current-runtime port
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/lossless-evidence"
-          git config user.name 'Codex Superfork Integration'
-          git config user.email '178243268+thehumanworks@users.noreply.github.com'
-          if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
-            git fetch --no-tags --filter=blob:none --unshallow origin superfork/harness-final-2026-09-22
-          fi
-          git remote add upstream https://github.com/openai/codex.git
-          source=16d35f17ee1b30282e8f85e149ef01536e14dcc5
-          git fetch --no-tags --filter=blob:none upstream "$source"
-          git merge-base --is-ancestor ec3b1ca18f25386d7224c06a74bab6eeef407c6e HEAD
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          result = json.loads(Path('superfork/evidence/storage-checkpoint.json').read_text())
-          assert result['status'] == 'scoped-checkpoint-passed-not-final-delivery'
-          PY
-          git show --no-patch --format=fuller "$source" > "$RUNNER_TEMP/lossless-evidence/source.txt"
-          if ! git merge-base --is-ancestor "$source" HEAD; then
-            before=$(git rev-parse HEAD)
-            git merge --no-ff --no-commit "$source" || test -f .git/MERGE_HEAD
-            test "$(git rev-parse MERGE_HEAD)" = "$source"
-            export BEFORE="$before"
-            python3 - <<'PY'
-          import os, subprocess
-          paths = {'codex-rs/app-server/src/in_process.rs', 'codex-rs/app-server/src/in_process_event_delivery.rs', 'codex-rs/app-server/src/lib.rs'}
-          actual = set(subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=U'], text=True).splitlines())
-          assert actual <= paths, f'Unexpected conflicts: {actual - paths}'
-          subprocess.run(['git', 'restore', '--source=' + os.environ['BEFORE'], '--staged', '--worktree', '--', *sorted(paths)], check=True)
-          PY
-            python3 superfork/ports/lossless.py
-            python3 - <<'PY'
-          from pathlib import Path
-          p = Path('codex-rs/app-server/src/in_process_lossless_tests.rs')
-          text = p.read_text()
-          old = 'sender.notify(ClientNotification::Initialized).await.expect("first command fits");'
-          new = 'sender.notify(ClientNotification::Initialized).expect("first command fits");'
-          assert text.count(old) == 1, 'notify signature/test drifted; review required'
-          p.write_text(text.replace(old, new))
-          PY
-            test -z "$(git diff --name-only --diff-filter=U)"
-            git add codex-rs/app-server/src
-            git diff --cached --check -- codex-rs/app-server/src
-            git commit -m 'feat(superfork): merge bounded lossless events and two-phase shutdown' -m "Source: openai/codex@$source. Retain current typed envelopes, cancellation, queue overload errors, explicit outbound shutdown, and analytics budget. Add bounded out-of-band shutdown admission and host-store interaction tests."
-          fi
-          git merge-base --is-ancestor "$source" HEAD
-          git merge-base --is-ancestor 4631a92ae60616c02d5c6c58ef3275d5c01c5ba0 HEAD
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('superfork/SELECTION.md')
-          text = p.read_text()
-          replacements = {
-              'Status: selected for implementation, **not yet delivered**.': 'Final scope: two independently useful, compatible embedding capabilities, S1 and S2. Execution and delivery status are recorded in `evidence/`; selection alone is not verification.',
-              '| Tool-free helper threads | 4 | 4 | 4.0 | Medium | High on missingness; reviewed gaps require fixes | Include, third checkpoint |': '| Tool-free helper threads | 4 | 4 | 4.0 | Medium–high | High on missingness; current-core compatibility reviewed | Exclude after deeper review; do not force a quota |',
-              '## Selected source locks and evidence': '## Source locks and semantic review',
-              '### S3 — Tool-free helper threads': '### Excluded after deeper review — Tool-free helper threads',
-              'Acceptance: model-only turns send zero model-visible tools': 'Acceptance required for a future port, not implemented or verified here: model-only turns send zero model-visible tools',
-              'before S3.': 'before combined verification.',
-              '3. Merge S3, repair the four reviewed gaps, generate config schema, and add normal-vs-tool-free integration controls.': '3. Exclude the tool-free port from this combination. The current core uses MCP runtime projections, extension-context contributors, and newer tool-registry planning that differ materially from the source. Closing all four reviewed gaps requires broader lifecycle and feature-propagation work. No partial tool-free flag or core rewrite is delivered merely to reach three features.',
-          }
-          for old, new in replacements.items():
-              if old in text:
-                  assert text.count(old) == 1, old
-                  text = text.replace(old, new)
-              else:
-                  assert new in text, old
-          marker = '### Excluded after deeper review — Tool-free helper threads\n'
-          decision = '\n**Final decision: excluded.** Its value remains 4.0, but the current MCP projection, extension context, and tool-registry architecture require a wider semantic port to close the review gaps. The two selected APIs form the highest-value compatible set reviewed here; no tool-free runtime changes are integrated.\n'
-          if decision not in text:
-              text = text.replace(marker, marker + decision)
-          p.write_text(text)
-          PY
-          git add superfork/SELECTION.md
-          if ! git diff --cached --quiet; then
-            git commit -m 'docs(superfork): finalize compatible two-feature scope after deeper review'
-          fi
       - name: Scoped lint and required formatting
         run: |
           set -euo pipefail
-          just fix -p codex-app-server --locked 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/clippy.log"
-          just fmt 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/format.log"
+          just fix -p codex-app-server --locked 2>&1 | tee "$EVIDENCE/clippy.log"
+          just fmt 2>&1 | tee "$EVIDENCE/format.log"
           git add codex-rs/app-server/src superfork
           if ! git diff --cached --quiet; then
-            git commit -m 'style(superfork): format and lint the combined event lifecycle'
+            git commit -m 'style(superfork): format the repaired runtime and checkpoint helpers'
           fi
           git diff --exit-code
-          just fmt-check 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/format-check.log"
-          git rev-parse HEAD > "$RUNNER_TEMP/lossless-evidence/tested-sha.txt"
-          git rev-parse HEAD:codex-rs > "$RUNNER_TEMP/lossless-evidence/tested-code-tree.txt"
-          rustc --version > "$RUNNER_TEMP/lossless-evidence/toolchain.txt"
-          cargo --version >> "$RUNNER_TEMP/lossless-evidence/toolchain.txt"
-          uname -a >> "$RUNNER_TEMP/lossless-evidence/toolchain.txt"
+          just fmt-check 2>&1 | tee "$EVIDENCE/format-check.log"
+          git rev-parse HEAD > "$EVIDENCE/tested-sha.txt"
+          git rev-parse HEAD:codex-rs > "$EVIDENCE/tested-code-tree.txt"
+          rustc --version > "$EVIDENCE/toolchain.txt"
+          cargo --version >> "$EVIDENCE/toolchain.txt"
+          uname -a >> "$EVIDENCE/toolchain.txt"
+      - name: Publish formatted checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash superfork/publish_stage.sh formatted
       - name: Behavioral acceptance and repeated concurrency checks
         run: |
           set -euo pipefail
-          just test --locked -p codex-app-server --lib -E 'test(in_process)' --retries 0 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/acceptance.log"
+          just test --locked -p codex-app-server --lib -E 'test(in_process)' --retries 0 2>&1 | tee "$EVIDENCE/acceptance.log"
           for attempt in 1 2 3 4 5; do
-            just test --locked -p codex-app-server --lib -E 'test(lossless_tests)' --retries 0 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/concurrency-$attempt.log"
+            just test --locked -p codex-app-server --lib -E 'test(lossless_tests) | test(shutdown_drain_tests)' --retries 0 2>&1 | tee "$EVIDENCE/concurrency-$attempt.log"
           done
+          python3 superfork/record_verification.py acceptance
+          git add superfork/evidence/final-acceptance.json
+          git commit -m 'test(superfork): record actual acceptance and five concurrency repetitions'
+      - name: Publish acceptance checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash superfork/publish_stage.sh acceptance
       - name: Full affected app-server and client suites
         run: |
           set -euo pipefail
-          just test --locked -p codex-app-server -p codex-app-server-client 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/affected-tests.log"
+          just test --locked -p codex-app-server -p codex-app-server-client 2>&1 | tee "$EVIDENCE/affected.log"
+          python3 superfork/record_verification.py affected
+          git add superfork/evidence/final-affected.json
+          git commit -m 'test(superfork): record full affected app-server and client suites'
+      - name: Publish affected-suite checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash superfork/publish_stage.sh affected
       - name: CLI build and preserved authentication smoke checks
         run: |
           set -euo pipefail
-          (cd codex-rs && cargo build --locked -p codex-cli) 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/cli-build.log"
-          "$CARGO_TARGET_DIR/debug/codex" --version | tee "$RUNNER_TEMP/lossless-evidence/cli-version.txt"
-          "$CARGO_TARGET_DIR/debug/codex" --help > "$RUNNER_TEMP/lossless-evidence/cli-help.txt"
-          "$CARGO_TARGET_DIR/debug/codex" exec --help > "$RUNNER_TEMP/lossless-evidence/exec-help.txt"
-          python3 scripts/test_chatgpt_env_auth.py --codex-bin "$CARGO_TARGET_DIR/debug/codex" 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/auth-smoke.log"
-      - name: Persist the verified feature checkpoint before broader tests
+          (cd codex-rs && cargo build --locked -p codex-cli) 2>&1 | tee "$EVIDENCE/cli-build.log"
+          "$CARGO_TARGET_DIR/debug/codex" --version | tee "$EVIDENCE/cli-version.txt"
+          "$CARGO_TARGET_DIR/debug/codex" --help > "$EVIDENCE/cli-help.txt"
+          "$CARGO_TARGET_DIR/debug/codex" exec --help > "$EVIDENCE/exec-help.txt"
+          python3 scripts/test_chatgpt_env_auth.py --codex-bin "$CARGO_TARGET_DIR/debug/codex" 2>&1 | tee "$EVIDENCE/auth-smoke.log"
+          python3 superfork/record_verification.py smoke
+          git add superfork/evidence/final-smoke.json
+          git commit -m 'test(superfork): verify built CLI and preserve environment authentication'
+      - name: Publish runnable CLI checkpoint
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          evidence = Path(os.environ['RUNNER_TEMP']) / 'lossless-evidence'
-          def summaries(name):
-              text = re.sub(r'\x1b\[[0-9;]*m', '', (evidence / name).read_text())
-              return [line for line in text.splitlines() if 'Summary [' in line or 'tests run:' in line]
-          result = {
-              'status': 'scoped-verified-not-final-delivery',
-              'tested_commit': (evidence / 'tested-sha.txt').read_text().strip(),
-              'tested_code_tree': (evidence / 'tested-code-tree.txt').read_text().strip(),
-              'workflow_run': os.environ['GITHUB_RUN_ID'],
-              'source_head': '16d35f17ee1b30282e8f85e149ef01536e14dcc5',
-              'acceptance': summaries('acceptance.log'),
-              'concurrency_repetitions': {str(n): summaries(f'concurrency-{n}.log') for n in range(1, 6)},
-              'affected_suites': summaries('affected-tests.log'),
-              'checks': ['just fix -p codex-app-server --locked', 'just fmt', 'just fmt-check', "just test --locked -p codex-app-server --lib -E 'test(in_process)' --retries 0", "five repetitions: just test --locked -p codex-app-server --lib -E 'test(lossless_tests)' --retries 0", 'just test --locked -p codex-app-server -p codex-app-server-client', 'cargo build --locked -p codex-cli', 'codex --version; codex --help; codex exec --help', 'python3 scripts/test_chatgpt_env_auth.py --codex-bin $CARGO_TARGET_DIR/debug/codex'],
-              'auth_smoke': (evidence / 'auth-smoke.log').read_text(),
-              'limitations': ['Linux runner only; macOS and Windows not executed.', 'The complete workspace suite is a separate promotion gate.', 'Injected storage durability belongs to the host implementation; ambient SQLite queues are disabled.', 'Lossless delivery applies only to the in-process API and requires a concurrent consumer.'],
-          }
-          Path('superfork/evidence/lossless-checkpoint.json').write_text(json.dumps(result, indent=2) + '\n')
-          PY
-          git add superfork/evidence/lossless-checkpoint.json
-          git commit -m 'docs(superfork): record executed combined feature acceptance and CLI smoke evidence'
-          gh auth setup-git
-          git push origin HEAD:refs/heads/superfork/harness-final-2026-09-22
+        run: bash superfork/publish_stage.sh smoke
       - name: Complete workspace verification
         run: |
           set -euo pipefail
-          just test --locked 2>&1 | tee "$RUNNER_TEMP/lossless-evidence/workspace-tests.log"
-      - name: Record final verification without automatically promoting main
+          just test --locked 2>&1 | tee "$EVIDENCE/workspace.log"
+          python3 superfork/record_verification.py workspace
+          git add superfork/evidence/final-workspace.json
+          git commit -m 'test(superfork): record successful combined workspace verification'
+      - name: Publish fully verified integration checkpoint
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tested=$(cat "$RUNNER_TEMP/lossless-evidence/tested-sha.txt")
-          git diff --exit-code "$tested" HEAD -- codex-rs scripts
-          python3 - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          evidence = Path(os.environ['RUNNER_TEMP']) / 'lossless-evidence'
-          text = re.sub(r'\x1b\[[0-9;]*m', '', (evidence / 'workspace-tests.log').read_text())
-          result = json.loads(Path('superfork/evidence/lossless-checkpoint.json').read_text())
-          result['status'] = 'verified-awaiting-default-branch-promotion'
-          result['workspace_command'] = 'just test --locked'
-          result['workspace_summary'] = [line for line in text.splitlines() if 'Summary [' in line or 'tests run:' in line]
-          result['workspace_retries'] = [line for line in text.splitlines() if 'RETRY' in line or 'FLAKY' in line]
-          result['toolchain'] = (evidence / 'toolchain.txt').read_text()
-          result['limitations'] = [item for item in result['limitations'] if 'complete workspace suite' not in item]
-          Path('superfork/evidence/combined-verification.json').write_text(json.dumps(result, indent=2) + '\n')
-          PY
-          git add superfork/evidence/combined-verification.json
-          git commit -m 'docs(superfork): record successful complete workspace verification'
-          git push origin HEAD:refs/heads/superfork/harness-final-2026-09-22
-          git ls-remote origin refs/heads/superfork/harness-final-2026-09-22 | tee "$RUNNER_TEMP/lossless-evidence/remote-integration.txt"
-      - name: Preserve source and logs even when a check fails
+        run: bash superfork/publish_stage.sh workspace
+      - name: Preserve diagnostic source and logs even after failures
         if: always()
         run: |
-          mkdir -p "$RUNNER_TEMP/lossless-evidence"
-          git diff HEAD > "$RUNNER_TEMP/lossless-evidence/uncommitted.patch"
-          git log -8 --format=fuller > "$RUNNER_TEMP/lossless-evidence/commits.txt"
-          git archive --format=tar.gz --prefix=codex-lossless/ HEAD > "$RUNNER_TEMP/lossless-evidence/source.tar.gz"
-          df -h > "$RUNNER_TEMP/lossless-evidence/disk.txt"
-      - name: Retain full verification evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+          mkdir -p "$RUNNER_TEMP/harness-verification"
+          git diff HEAD > "$RUNNER_TEMP/harness-verification/uncommitted.patch"
+          git log -12 --format=fuller > "$RUNNER_TEMP/harness-verification/commits.txt"
+          git archive --format=tar.gz --prefix=codex-harness/ HEAD > "$RUNNER_TEMP/harness-verification/source.tar.gz"
+          df -h > "$RUNNER_TEMP/harness-verification/disk.txt"
+          if test -f "$RUNNER_TEMP/harness-checkpoint-errors.txt"; then
+            cp "$RUNNER_TEMP/harness-checkpoint-errors.txt" "$RUNNER_TEMP/harness-verification/"
+          fi
+      - name: Retain compiled dependencies independently of test success
+        if: always() && steps.cache.outcome == 'success'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          name: harness-lossless-${{ github.run_id }}
-          path: ${{ runner.temp }}/lossless-evidence/
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/codex-ci/cargo-target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: harness-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/harness-verification/
           retention-days: 14
