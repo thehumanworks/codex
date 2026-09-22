@@ -5,6 +5,7 @@ The integration workflow merges the pinned upstream source for authorship, resto
 its four outdated paths from the pre-merge tree, then runs these checked edits.
 Unexpected source changes fail closed rather than selecting ours/theirs globally.
 """
+
 from pathlib import Path
 
 root = Path.cwd()
@@ -18,8 +19,15 @@ def edit(path, old, new, count=1):
 
 
 path = "codex-rs/app-server/src/in_process.rs"
-edit(path, "use codex_protocol::protocol::SessionSource;", "use codex_protocol::protocol::SessionSource;\nuse codex_thread_store::ThreadStore;")
-edit(path, "/// Event emitted from the app-server to the in-process client.", """/// Optional host overrides for the embedded runtime.
+edit(
+    path,
+    "use codex_protocol::protocol::SessionSource;",
+    "use codex_protocol::protocol::SessionSource;\nuse codex_thread_store::ThreadStore;",
+)
+edit(
+    path,
+    "/// Event emitted from the app-server to the in-process client.",
+    """/// Optional host overrides for the embedded runtime.
 ///
 /// Defaults preserve config-derived persistence and the existing transport behavior.
 #[derive(Clone, Default)]
@@ -39,8 +47,12 @@ impl InProcessStartOptions {
     }
 }
 
-/// Event emitted from the app-server to the in-process client.""")
-edit(path, "pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {", """pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+/// Event emitted from the app-server to the in-process client.""",
+)
+edit(
+    path,
+    "pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {",
+    """pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     start_with_options(args, InProcessStartOptions::default()).await
 }
 
@@ -50,23 +62,43 @@ edit(path, "pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProce
 pub async fn start_with_options(
     mut args: InProcessStartArgs,
     options: InProcessStartOptions,
-) -> IoResult<InProcessClientHandle> {""")
-edit(path, "let client = start_uninitialized(args).await?;", "let client = start_uninitialized(args, options).await?;")
-edit(path, "async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {", """async fn start_uninitialized(
+) -> IoResult<InProcessClientHandle> {""",
+)
+edit(
+    path,
+    "let client = start_uninitialized(args).await?;",
+    "let client = start_uninitialized(args, options).await?;",
+)
+edit(
+    path,
+    "async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {",
+    """async fn start_uninitialized(
     args: InProcessStartArgs,
     options: InProcessStartOptions,
-) -> IoResult<InProcessClientHandle> {""")
-edit(path, "                state_db: args.state_db,", "                state_db: args.state_db,\n                thread_store: options.thread_store,")
-edit(path, """    async fn start_test_client_with_capacity(
+) -> IoResult<InProcessClientHandle> {""",
+)
+edit(
+    path,
+    "                state_db: args.state_db,",
+    "                state_db: args.state_db,\n                thread_store: options.thread_store,",
+)
+edit(
+    path,
+    """    async fn start_test_client_with_capacity(
         session_source: SessionSource,
         channel_capacity: usize,
     ) -> InProcessClientHandle {
-        let codex_home""", """    pub(super) async fn build_test_start_args(
+        let codex_home""",
+    """    pub(super) async fn build_test_start_args(
         session_source: SessionSource,
         channel_capacity: usize,
     ) -> (TempDir, InProcessStartArgs) {
-        let codex_home""")
-edit(path, '        let mut client = start(args).await.expect("in-process runtime should start");', """        (codex_home, args)
+        let codex_home""",
+)
+edit(
+    path,
+    '        let mut client = start(args).await.expect("in-process runtime should start");',
+    """        (codex_home, args)
     }
 
     async fn start_test_client_with_capacity(
@@ -74,15 +106,32 @@ edit(path, '        let mut client = start(args).await.expect("in-process runtim
         channel_capacity: usize,
     ) -> InProcessClientHandle {
         let (codex_home, args) = build_test_start_args(session_source, channel_capacity).await;
-        let mut client = start(args).await.expect("in-process runtime should start");""")
+        let mut client = start(args).await.expect("in-process runtime should start");""",
+)
 with (root / path).open("a") as output:
-    output.write('\n#[cfg(test)]\n#[path = "in_process_stores_tests.rs"]\nmod stores_tests;\n')
+    output.write(
+        '\n#[cfg(test)]\n#[path = "in_process_stores_tests.rs"]\nmod stores_tests;\n'
+    )
 
 path = "codex-rs/app-server/src/message_processor.rs"
-edit(path, "use codex_thread_store::QueueStore;", "use codex_thread_store::QueueStore;\nuse codex_thread_store::ThreadStore;")
-edit(path, "    pub(crate) state_db: Option<StateDbHandle>,", "    pub(crate) state_db: Option<StateDbHandle>,\n    pub(crate) thread_store: Option<Arc<dyn ThreadStore>>,")
-edit(path, "            state_db,\n            config_warnings,", "            state_db,\n            thread_store,\n            config_warnings,")
-edit(path, """        let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+edit(
+    path,
+    "use codex_thread_store::QueueStore;",
+    "use codex_thread_store::QueueStore;\nuse codex_thread_store::ThreadStore;",
+)
+edit(
+    path,
+    "    pub(crate) state_db: Option<StateDbHandle>,",
+    "    pub(crate) state_db: Option<StateDbHandle>,\n    pub(crate) thread_store: Option<Arc<dyn ThreadStore>>,",
+)
+edit(
+    path,
+    "            state_db,\n            config_warnings,",
+    "            state_db,\n            thread_store,\n            config_warnings,",
+)
+edit(
+    path,
+    """        let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
         // Queue persistence requires SQLite, so in-memory thread stores and
         // app servers without a state database do not have a queue backend.
         let queue_store: Option<Arc<dyn QueueStore>> = match &config.experimental_thread_store {
@@ -90,7 +139,8 @@ edit(path, """        let thread_store = codex_core::thread_store_from_config(co
                 Arc::new(LocalQueueStore::new(Arc::clone(state_db))) as Arc<dyn QueueStore>
             }),
             ThreadStoreConfig::InMemory { .. } => None,
-        };""", """        // An injected thread store must not accidentally use an unrelated local
+        };""",
+    """        // An injected thread store must not accidentally use an unrelated local
         // SQLite queue. Queue persistence is available only for config-derived
         // local stores with a state database; custom stores opt out explicitly.
         let queue_store: Option<Arc<dyn QueueStore>> = if thread_store.is_some() {
@@ -105,7 +155,8 @@ edit(path, """        let thread_store = codex_core::thread_store_from_config(co
         };
         let thread_store = thread_store.unwrap_or_else(|| {
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone())
-        });""")
+        });""",
+)
 
 # Preserve default storage in every current constructor, including newer tests.
 for target in (root / "codex-rs/app-server/src").rglob("*.rs"):
@@ -120,7 +171,9 @@ for target in (root / "codex-rs/app-server/src").rglob("*.rs"):
             in_args = True
         result.append(line)
         if in_args and ("state_db:" in line or line.strip() == "state_db,"):
-            result.append(line[:len(line) - len(line.lstrip())] + "thread_store: None,\n")
+            result.append(
+                line[: len(line) - len(line.lstrip())] + "thread_store: None,\n"
+            )
             in_args, added = False, added + 1
     assert added, target
     target.write_text("".join(result))
