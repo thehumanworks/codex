@@ -47,7 +47,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cache/codex-ci/cargo-target
-          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-storage-v1
+          key: harness-linux-1.95-${{ hashFiles('codex-rs/Cargo.lock') }}-storage-v2
           restore-keys: harness-linux-1.95-
       - name: Merge pinned source with reviewed semantic adaptation
         run: |
